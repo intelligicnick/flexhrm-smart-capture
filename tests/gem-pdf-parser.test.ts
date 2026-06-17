@@ -1,0 +1,156 @@
+import { describe, expect, it } from 'vitest';
+import {
+  formatPreBidDisplay,
+  parseGemBidPdfText,
+} from '../src/modules/tenders/gem-pdf-parser';
+
+const SAMPLE_PDF = `
+Bid Number: GEM/2026/B/7590568
+Item Description: Facility Management Services - Manpower for office premises
+Pre Bid Meeting Date & Time: 15-06-2026 11:00 AM
+Pre Bid Meeting Venue: PMO Office, Mumbai
+Estimated Bid Value: Rs. 12,50,000
+Consignee Location: Department of Atomic Energy, Mumbai
+`;
+
+const GEM_NIT_FLAT = `
+Bid Number GEM/2026/B/7616472 Pre Bid Meeting Required Yes Pre Bid Meeting Date and Time 10-06-2026 3:00 PM Pre Bid Meeting Venue BPCL Office Mumbai Estimated Bid Value Rs. 500000 Item Description Security Manpower Service
+`;
+
+const GEM_MULTILINE_PDF = `
+Bid Number GEM/2026/B/7553845
+Pre Bid Meeting Required
+Yes
+Pre Bid Meeting Date and Time
+20-06-2026 3:00 PM
+Pre Bid Meeting Venue
+PMO Conference Hall, New Delhi
+Estimated Bid Value
+in INR (Inclusive of all taxes)
+50000000
+Item Description
+Facility Management Services
+`;
+
+const GEM_7553845_PDF = `
+Bid Number GEM/2026/B/7553845
+Pre Bid Detail(s)
+Pre-Bid Date and Time
+01-06-2026 15:00:00
+Pre-Bid Venue
+Raman Research Institute
+C.V. Raman Avenue, Sadashivanagar,
+Bangalore - 560080
+Additional Requirement
+Tenure/ Duration of Employment (in months) : 36
+Basic Pay (Minimum daily wage) : 1008
+Provident Fund (INR per day) : 69.23
+EDLI (INR per day) : 0
+ESI (INR per day) : 6.07
+EPF Admin charge (INR per day) : 0
+Bonus (INR per day) : 0
+Optional Allowance 1 (in Rupees) : 35
+Optional Allowance 2 (in Rupees) : 0
+Optional Allowance 3 (in Rupees) : 0
+Number of working days in a month : 26
+Estimated Bid Value
+in INR (Inclusive of all taxes)
+50000000
+`;
+
+const ESIC_MANPOWER_PDF = `
+Bid Number GEM/2026/B/7000002
+Ministry/State Name
+Ministry of Labour and Employment
+Organisation Name
+Employees State Insurance Corporation
+Item Category Security Manpower Service (Version 2.0)
+Additional Requirement
+Tenure/ Duration of Employment (in months) : 12
+Basic Pay (Minimum daily wage) : 781
+Provident Fund (INR per day) : 101.53
+ESI (INR per day) : 23.43
+Number of working days in a month : 26
+Consignee Reporting/Officer: Shankar Singh
+Address: 342306, KVS Campus, Govt Primary School
+Estimated Bid Value in INR (Inclusive of all taxes) 500000
+`;
+
+describe('GeM PDF parser', () => {
+  it('extracts ministry, organisation, consignee, and strips officer from additional requirements', () => {
+    const details = parseGemBidPdfText(ESIC_MANPOWER_PDF);
+    expect(details.ministry.toLowerCase()).toContain('labour');
+    expect(details.organisation).toContain('Employees State Insurance Corporation');
+    expect(details.consigneeOfficer).toBe('Shankar Singh');
+    expect(details.address).toContain('342306');
+    expect(details.additionalRequirements).toContain('Basic Pay');
+    expect(details.additionalRequirements).toContain('781');
+    expect(details.additionalRequirements.toLowerCase()).not.toContain('shankar singh');
+    expect(details.additionalRequirements.toLowerCase()).not.toContain('consignee reporting');
+  });
+
+  it('extracts pre-bid and consignee location from bid PDF text', () => {
+    const details = parseGemBidPdfText(SAMPLE_PDF);
+    expect(details.preBidAt).toContain('15-06-2026');
+    expect(details.rate).toBe('');
+    expect(details.description).toBe('');
+    expect(details.address.toLowerCase()).toContain('mumbai');
+    expect(details.preBidAddress.toLowerCase()).toContain('mumbai');
+    expect(details.noPreBid).toBe(false);
+  });
+
+  it('extracts pre-bid from flat GeM NIT text', () => {
+    const details = parseGemBidPdfText(GEM_NIT_FLAT);
+    expect(details.preBidAt).toContain('10-06-2026');
+    expect(details.preBidAt).toMatch(/3:00 PM/i);
+    expect(details.rate).toBe('');
+    expect(details.description).toBe('');
+    expect(details.preBidAddress.toLowerCase()).toContain('mumbai');
+  });
+
+  it('extracts pre-bid from multiline GeM table PDF text', () => {
+    const details = parseGemBidPdfText(GEM_MULTILINE_PDF);
+    expect(details.preBidAt).toContain('20-06-2026');
+    expect(details.preBidAt).toMatch(/3:00 PM/i);
+    expect(details.preBidAddress.toLowerCase()).toContain('new delhi');
+    expect(details.rate).toBe('');
+    expect(details.noPreBid).toBe(false);
+  });
+
+  it('extracts GeM pre-bid detail table and additional requirements for GEM/2026/B/7553845', () => {
+    const details = parseGemBidPdfText(GEM_7553845_PDF);
+    expect(details.preBidAt).toBe('01-06-2026 15:00:00');
+    expect(details.preBidAddress.toLowerCase()).toContain('raman research institute');
+    expect(details.preBidAddress.toLowerCase()).toContain('bangalore');
+    expect(details.rate).toBe('');
+    expect(details.additionalRequirements).toContain('Basic Pay');
+    expect(details.additionalRequirements).toContain('1008');
+    expect(details.additionalRequirements).toContain('Tenure');
+    expect(details.noPreBid).toBe(false);
+  });
+
+  it('extracts GeM pre-bid table row when headers precede values on one line', () => {
+    const flat = `
+      Pre Bid Detail(s)
+      Pre-Bid Date and Time Pre-Bid Venue 01-06-2026 15:00:00 Raman Research Institute C.V. Raman Avenue Bangalore - 560080
+      Additional Requirement Tenure/ Duration of Employment (in months) : 36
+      Estimated Bid Value in INR (Inclusive of all taxes) 50000000
+    `;
+    const details = parseGemBidPdfText(flat);
+    expect(details.preBidAt).toBe('01-06-2026 15:00:00');
+    expect(details.preBidAddress.toLowerCase()).toContain('raman research institute');
+    expect(details.noPreBid).toBe(false);
+  });
+
+  it('formats pre-bid display with venue', () => {
+    expect(formatPreBidDisplay('20-06-2026 3:00 PM', 'PMO Conference Hall')).toBe(
+      '20-06-2026 3:00 PM @ PMO Conference Hall',
+    );
+  });
+
+  it('detects no pre-bid when explicitly marked', () => {
+    const details = parseGemBidPdfText('Pre Bid Meeting Required: No. Bid Number GEM/2026/B/1');
+    expect(details.noPreBid).toBe(true);
+    expect(details.preBidAt).toBe('');
+  });
+});

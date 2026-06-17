@@ -1,0 +1,113 @@
+#flexhrm-fab {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 2147483646;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: #1e293b;
+  color: #fff;
+  border: 2px solid #ff791a;
+  box-shadow: 0 8px 24px rgba(30, 41, 59, 0.45);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+#flexhrm-fab:hover {
+  transform: scale(1.06);
+  box-shadow: 0 12px 28px rgba(255, 121, 26, 0.35);
+}
+
+#flexhrm-fab.loading {
+  opacity: 0.7;
+  pointer-events: none;
+  animation: flexhrm-pulse 1s ease-in-out infinite;
+}
+
+@keyframes flexhrm-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(0.95); }
+}
+
+#flexhrm-fab-menu {
+  position: fixed;
+  bottom: 90px;
+  right: 24px;
+  z-index: 2147483646;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+  padding: 8px;
+  min-width: 200px;
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+#flexhrm-fab-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #1e293b;
+}
+
+#flexhrm-fab-menu button:hover:not(:disabled) {
+  background: #f1f5f9;
+}
+
+#flexhrm-fab-menu button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+#flexhrm-selection-toolbar {
+  position: absolute;
+  z-index: 2147483647;
+  background: #1e293b;
+  color: #fff;
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-family: system-ui, sans-serif;
+  font-size: 12px;
+  display: flex;
+  gap: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+}
+
+#flexhrm-selection-toolbar button {
+  background: #2563eb;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+#flexhrm-pdf-dropzone {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483645;
+  background: rgba(37, 99, 235, 0.12);
+  border: 3px dashed #2563eb;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  font-family: system-ui, sans-serif;
+  font-size: 18px;
+  color: #1d4ed8;
+  font-weight: 600;
+}
+
+#flexhrm-pdf-dropzone.active {
+  display: flex;
+}
