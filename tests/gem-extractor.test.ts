@@ -55,6 +55,21 @@ Start Date: 01-06-2026 10:00:00
     expect(t.endDate).toContain('18-06-2026');
   });
 
+  it('does not put address fragments into consignee officer on card text', async () => {
+    const brokenCard = `
+BID NO: GEM/2026/B/9000001
+Items: Security Manpower Service
+Consignee Reporting/Officer:
+Address: JJ Hospital Mumbai
+End Date: 18-06-2026 13:00:00
+`;
+    document.body.innerHTML = `<div class="tender-card">${brokenCard}</div>`;
+    const { extractGemTendersFromPage } = await import('../src/modules/tenders/gem-extractor');
+    const tenders = extractGemTendersFromPage();
+    expect(tenders[0].consigneeOfficer).toBe('');
+    expect(tenders[0].address).toContain('JJ Hospital');
+  });
+
   it('detects bidplus seller-bids pages', async () => {
     const { isGemTenderPage } = await import('../src/modules/tenders/gem-extractor');
     expect(isGemTenderPage('https://bidplus.gem.gov.in/seller-bids')).toBe(true);

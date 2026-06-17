@@ -11,8 +11,47 @@ export interface GemPdfDetails {
   noPreBid: boolean;
 }
 
+const GEM_LABEL_BREAK_RE =
+  /\s+(?=(?:Ministry\/State Name|Ministry \/ State Name|Organisation Name|Organization Name|\/Organisation Name|Item Category|Consignee Reporting\/Officer|Consignee Reporting Officer|Additional Requirement|Address:|Estimated Bid|Bid Number|Bid End|Pre[- ]?Bid|Quantity|S\.?\s*No\.?))/gi;
+
+/** Rebuild GeM PDF structure when text is flattened or labels are split across lines. */
+export function normalizeGemPdfText(text: string): string {
+  let normalized = text.replace(/\r/g, '\n');
+
+  normalized = normalized.replace(
+    /Consignee\s*\n\s*Reporting\s*\/?\s*Officer/gi,
+    'Consignee Reporting/Officer',
+  );
+  normalized = normalized.replace(/Additional\s*\n\s*Requirement/gi, 'Additional Requirement');
+  normalized = normalized.replace(/Ministry\s*\/?\s*State\s*\n\s*Name/gi, 'Ministry/State Name');
+  normalized = normalized.replace(/Organisation\s*\n\s*Name/gi, 'Organisation Name');
+  normalized = normalized.replace(/Reporting\s*\n\s*\/?\s*Officer/gi, 'Reporting/Officer');
+  normalized = normalized.replace(/\s+\/Organisation Name/gi, ' Organisation Name');
+
+  const nonEmptyLines = normalized.split('\n').filter((line) => line.trim()).length;
+  if (nonEmptyLines <= 4) {
+    const flat = normalized.replace(/\n+/g, ' ').replace(/\s+/g, ' ').trim();
+    normalized = flat.replace(GEM_LABEL_BREAK_RE, '\n');
+  }
+
+  return normalized;
+}
+
+export function isJunkTenderFieldValue(value: string): boolean {
+  const v = value.trim();
+  if (!v) return true;
+  if (/^:+$/.test(v)) return true;
+  if (/^\/address/i.test(v)) return true;
+  if (/^address\s*:/i.test(v)) return true;
+  if (v.length <= 2) return true;
+  if (/^reporting\s*\/?\s*officer/i.test(v)) return true;
+  return false;
+}
+
 const DATE_TIME_RE =
   /(\d{1,2}[-/]\d{1,2}[-/]\d{4}(?:\s+\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:AM|PM|am|pm)?)?)?)/;
+
+const OPTIONAL_LABEL_SEP = '(?:[:\\-–])?';
 
 const NEXT_LABEL_RE =
   /(?:Pre[- ]?Bid|Additional\s+Requirement|Estimated|Item Description|Bid Number|Quantity|Department|Tender Type|EMD|Minimum|Consignee|Bid End|Bid Opening|Tenure|Ministry\/State|Organisation Name|Organization Name)/i;
@@ -35,13 +74,26 @@ function isPlausibleFieldValue(value: string, minLen = 4): boolean {
 }
 
 function extractAddress(raw: string, flat: string): string {
+  const patterns = [
+    /(?:^|[\n,])\s*address\s*:\s*([^,\n]+(?:,\s*[^,\n]+){0,10}?)(?=\s*,\s*(?:additional requirement|estimated|consignee|bid number|item category|tenure|s\.?\s*no)|\s*$)/i,
+    /address\s*:\s*([^,\n]+(?:,\s*[^,\n]+){0,10}?)(?=\s+additional\s+requirement|\s+estimated|\s+consignee|\s*$)/i,
+  ];
+
+  for (const source of [raw, flat]) {
+    for (const pattern of patterns) {
+      const match = source.match(pattern);
+      const value = cleanFieldValue(match?.[1] ?? '');
+      if (isPlausibleFieldValue(value)) return value;
+    }
+  }
+
   const labeled =
     extractStrictLabel(raw, ['Consignee Address', 'Consignee Location', 'Delivery Location']) ||
-    extractStrictLabel(flat, ['Consignee Address', 'Consignee Location', 'Delivery Location']) ||
-    extractStrictLabel(raw, ['Address']) ||
-    extractStrictLabel(flat, ['Address']);
+    extractStrictLabel(flat, ['Consignee Address', 'Consignee Location', 'Delivery Location']);
   return labeled;
 }
+
+export { extractAddress };
 
 function extractStrictLabel(text: string, labels: string[]): string {
   for (const label of labels) {
@@ -49,7 +101,7 @@ function extractStrictLabel(text: string, labels: string[]): string {
     const patterns = [
       new RegExp(`${escaped}\\s*[:\\-–]\\s*([^\\n]{3,300})`, 'i'),
       new RegExp(
-        `${escaped}\\s*[:\\-–]?\\s*\\n\\s*([^\\n]{2,300}?)(?=\\n\\s*${NEXT_LABEL_RE.source}|$)`,
+        `${escaped}\\s*${OPTIONAL_LABEL_SEP}\\s*\\n\\s*([^\\n]{2,300}?)(?=\\n\\s*${NEXT_LABEL_RE.source}|$)`,
         'i',
       ),
     ];
@@ -76,7 +128,7 @@ function extractAfterLabel(text: string, labels: string[]): string {
   for (const label of labels) {
     const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const patterns = [
-      new RegExp(`${escaped}\\s*[:\\-–]?\\s*([^\\n]{3,400})`, 'i'),
+      new RegExp(`${escaped}\\s*${OPTIONAL_LABEL_SEP}\\s*([^\\n]{3,400})`, 'i'),
       new RegExp(`${escaped}\\s+(${DATE_TIME_RE.source})`, 'i'),
       new RegExp(
         `${escaped}\\s+([^\\n]+?)\\s+(?:Pre Bid|Estimated|Item|Bid Number|Consignee|$)`,
@@ -97,10 +149,10 @@ function extractAfterLabelMultiline(text: string, labels: string[]): string {
     const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const patterns = [
       new RegExp(
-        `${escaped}\\s*[:\\-–]?\\s*\\n\\s*([^\\n]{2,400}?)(?=\\n\\s*${NEXT_LABEL_RE.source}|$)`,
+        `${escaped}\\s*${OPTIONAL_LABEL_SEP}\\s*\\n\\s*([^\\n]{2,400}?)(?=\\n\\s*${NEXT_LABEL_RE.source}|$)`,
         'i',
       ),
-      new RegExp(`${escaped}\\s*[:\\-–]?\\s*\\n\\s*([^\\n]{2,400})`, 'i'),
+      new RegExp(`${escaped}\\s*${OPTIONAL_LABEL_SEP}\\s*\\n\\s*([^\\n]{2,400})`, 'i'),
     ];
     for (const pattern of patterns) {
       const match = text.match(pattern);
@@ -121,7 +173,7 @@ function extractBlockAfterLabel(text: string, labels: string[]): string {
   for (const label of labels) {
     const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const pattern = new RegExp(
-      `${escaped}\\s*[:\\-–]?\\s*([\\s\\S]{15,1500}?)(?=\\n\\s*(?:Pre Bid|Estimated|Item Description|Bid Number|Quantity|Department|Tender Type|EMD|Minimum|$))`,
+      `${escaped}\\s*${OPTIONAL_LABEL_SEP}\\s*([\\s\\S]{15,1500}?)(?=\\n\\s*(?:Pre Bid|Estimated|Item Description|Bid Number|Quantity|Department|Tender Type|EMD|Minimum|$))`,
       'i',
     );
     const match = text.match(pattern);
@@ -269,11 +321,24 @@ function extractPreBidVenue(raw: string, flat: string, preBidAt = ''): string {
 }
 
 function cleanPersonName(value: string): string {
-  const name = cleanFieldValue(value).replace(/^[\s:–\-]+/, '').trim();
+  const name = cleanFieldValue(value)
+    .replace(/^[\s:–\-]+/, '')
+    .replace(/^\d+\s+/, '')
+    .trim();
   if (!name || /^:+$/.test(name)) return '';
   if (!/[A-Za-z]/.test(name)) return '';
+  if (/^\/address/i.test(name)) return '';
+  if (/^address\s*:/i.test(name)) return '';
   if (/tenure|basic pay|provident fund|working days|months?\s*:/i.test(name)) return '';
+  if (/^(consignee|reporting|officer)$/i.test(name)) return '';
   return name;
+}
+
+function extractNumberedConsigneeName(text: string): string {
+  const match = text.match(
+    /(?:^|[\n,])\s*\d+\s+([A-Z][A-Za-z]+(?:\s+[A-Za-z]+){1,4})\s*(?:\n|,|$)/m,
+  );
+  return cleanPersonName(match?.[1] ?? '');
 }
 
 function extractGemLabeledField(
@@ -284,7 +349,7 @@ function extractGemLabeledField(
 ): string {
   const stopSource = stopLabels.map((l) => l.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
   const stopRe = stopSource
-    ? new RegExp(`\\s+(?:${stopSource})\\s*[:\\-–]?`, 'i')
+    ? new RegExp(`\\s+(?:${stopSource})\\s*${OPTIONAL_LABEL_SEP}`, 'i')
     : null;
 
   for (const label of labels) {
@@ -329,16 +394,21 @@ export function extractOrganisation(raw: string, flat: string): string {
 }
 
 export function extractConsigneeOfficer(raw: string, flat: string): string {
+  const patterns = [
+    /consignee\s+reporting\s*\/?\s*officer\s*:\s*([A-Za-z][A-Za-z\s.'-]{1,80}?)(?=\s*,\s*address\s*:|\s+address\s*:|\s*,|\s*$)/i,
+    /consignee\s+reporting\s*\/?\s*officer\s*[:\-–]?\s*([A-Za-z][A-Za-z\s.'-]{1,80}?)(?=\s+address\s*[:\-–]|\n|$)/i,
+    /consignee\s+reporting\s*\/?\s*officer\s*\n\s*([A-Za-z][A-Za-z\s.'-]{1,80})/i,
+  ];
+
   for (const source of [raw, flat]) {
-    const patterns = [
-      /consignee\s+reporting\s*\/?\s*officer\s*[:\-–]?\s*([A-Za-z][A-Za-z\s.'-]{1,80}?)(?=\s+address\s*[:\-–]|\s*$|\n)/i,
-      /consignee\s+reporting\s*\/?\s*officer\s*\n\s*([A-Za-z][A-Za-z\s.'-]{1,80})/i,
-    ];
     for (const pattern of patterns) {
       const match = source.match(pattern);
       const name = cleanPersonName(match?.[1] ?? '');
       if (name) return name;
     }
+
+    const numbered = extractNumberedConsigneeName(source);
+    if (numbered) return numbered;
   }
 
   const fromLabel = extractGemLabeledField(
@@ -358,6 +428,7 @@ function stripConsigneeLinesFromBlock(block: string): string {
       if (!line) return false;
       if (/consignee\s+reporting|reporting\s*\/?\s*officer/i.test(line)) return false;
       if (/^address\s*[:\-–]/i.test(line)) return false;
+      if (/^\d+\s+[A-Z][A-Za-z]+(?:\s+[A-Za-z]+){1,4}$/.test(line)) return false;
       return true;
     })
     .join('\n');
@@ -370,10 +441,16 @@ function extractAdditionalRequirements(raw: string, flat: string): {
 } {
   const blockMatch =
     raw.match(
-      /additional\s+requirement\s*\n([\s\S]{20,4000}?)(?=\n\s*(?:estimated|item description|bid number|specification|emd|minimum|department|tender type|$))/i,
+      new RegExp(
+        `additional\\s+requirement\\s*${OPTIONAL_LABEL_SEP}\\s*\\n?([\\s\\S]{20,4000}?)(?=\\n\\s*(?:estimated|item description|bid number|specification|emd|minimum|department|tender type|$))`,
+        'i',
+      ),
     ) ||
     flat.match(
-      /additional\s+requirement\s+(.+?)(?=\s+(?:estimated\s+bid\s+value|item description|bid number|specification|emd|minimum|department|tender type|$))/i,
+      new RegExp(
+        `additional\\s+requirement\\s*${OPTIONAL_LABEL_SEP}\\s*(.+?)(?=\\s+(?:estimated\\s+bid\\s+value|item description|bid number|specification|emd|minimum|department|tender type|$))`,
+        'i',
+      ),
     );
 
   if (!blockMatch?.[1]) {
@@ -382,16 +459,19 @@ function extractAdditionalRequirements(raw: string, flat: string): {
 
   const block = blockMatch[1];
   let consigneeOfficer = '';
-  let address = '';
 
   const officerMatch = block.match(
-    /consignee\s+reporting\s*\/?\s*officer\s*[:\-–]?\s*([^\n]+)/i,
+    /consignee\s+reporting\s*\/?\s*officer\s*[:\-–]?\s*([^,\n]+)/i,
   );
   if (officerMatch?.[1]) {
     consigneeOfficer = cleanPersonName(officerMatch[1]);
   }
+  if (!consigneeOfficer) {
+    consigneeOfficer = extractNumberedConsigneeName(block);
+  }
 
-  const addressMatch = block.match(/(?:^|\n)\s*address\s*[:\-–]?\s*([^\n]+)/i);
+  let address = '';
+  const addressMatch = block.match(/(?:^|[\n,])\s*address\s*[:\-–]?\s*([^,\n]+)/i);
   if (addressMatch?.[1]) {
     address = cleanFieldValue(addressMatch[1]);
   }
@@ -409,6 +489,36 @@ function extractAdditionalRequirements(raw: string, flat: string): {
     additionalRequirements: hasManpowerTerms ? body : '',
     consigneeOfficer,
     address,
+  };
+}
+
+export function parseGemOrganisationFromText(text: string): {
+  ministry: string;
+  organisation: string;
+  consigneeOfficer: string;
+  address: string;
+  additionalRequirements: string;
+} {
+  const raw = normalizeGemPdfText(text);
+  const flat = raw.replace(/\s+/g, ' ').trim();
+  const addReqBlock = extractAdditionalRequirements(raw, flat);
+
+  let consigneeOfficer = extractConsigneeOfficer(raw, flat);
+  if (!consigneeOfficer) {
+    consigneeOfficer = addReqBlock.consigneeOfficer;
+  }
+
+  let address = extractAddress(raw, flat);
+  if (!address) {
+    address = addReqBlock.address;
+  }
+
+  return {
+    ministry: extractMinistry(raw, flat),
+    organisation: extractOrganisation(raw, flat),
+    consigneeOfficer,
+    address,
+    additionalRequirements: addReqBlock.additionalRequirements,
   };
 }
 
@@ -497,7 +607,7 @@ export function formatPreBidDisplay(preBidAt: string, preBidAddress: string): st
 }
 
 export function parseGemBidPdfText(text: string): GemPdfDetails {
-  const raw = text.replace(/\r/g, '\n');
+  const raw = normalizeGemPdfText(text.replace(/\r/g, '\n'));
   const flat = raw.replace(/\s+/g, ' ').trim();
 
   let preBidAt = extractPreBidDateTime(raw, flat);

@@ -1,11 +1,13 @@
 import type { ExtractedTender } from '../../shared/types';
 import { postDebugLog } from '../../shared/utils/messaging';
 import { fetchGemBidPdfByDocId, fetchGemBidPdfOnPage } from './gem-pdf-fetch';
-import { parseGemBidPdfText } from './gem-pdf-parser';
+import { parseGemBidPdfText, isJunkTenderFieldValue } from './gem-pdf-parser';
 
 function applyPdfField(current: string, parsed: string): string {
   const next = parsed.trim();
-  return next ? next : current;
+  if (next) return next;
+  if (isJunkTenderFieldValue(current)) return '';
+  return current;
 }
 
 export function applyPdfDetailsToTender(

@@ -76,7 +76,40 @@ Address: 342306, KVS Campus, Govt Primary School
 Estimated Bid Value in INR (Inclusive of all taxes) 500000
 `;
 
+const GEM_FLAT_KVS_PDF = `Bid Number GEM/2026/B/7000001 Ministry/State Name Ministry Of Education Organisation Name Kendriya Vidyalaya Sangathan Item Category Security Manpower Service (Version 2.0) Consignee Reporting/Officer:Shankar Singh ,Address:342306,KVS tiveri, Govt Primary School Campus,Additional Requirement:Tenure/ Duration of Employment (in months) : 12 Basic Pay (Minimum daily wage) : 781 Provident Fund (INR per day) : 101.53 ESI (INR per day) : 23.43 Number of working days in a month : 26 Estimated Bid Value in INR (Inclusive of all taxes) 500000`;
+
+const GEM_NUMBERED_CONSIGNEE_PDF = `
+Bid Number GEM/2026/B/8000001
+Ministry/State Name
+Ministry of Labour and Employment
+Organisation Name
+Employees State Insurance Corporation
+Additional Requirement
+Tenure/ Duration of Employment (in months) : 12
+Basic Pay (Minimum daily wage) : 781
+1 Jay Prakash Kumar
+Address: ESIC Hospital Korba
+Estimated Bid Value in INR 500000
+`;
+
 describe('GeM PDF parser', () => {
+  it('extracts fields from fully flattened GeM PDF text', () => {
+    const details = parseGemBidPdfText(GEM_FLAT_KVS_PDF);
+    expect(details.ministry).toContain('Ministry Of Education');
+    expect(details.organisation).toContain('Kendriya Vidyalaya Sangathan');
+    expect(details.consigneeOfficer).toBe('Shankar Singh');
+    expect(details.address).toContain('342306');
+    expect(details.additionalRequirements).toContain('Basic Pay');
+    expect(details.additionalRequirements.toLowerCase()).not.toContain('shankar singh');
+  });
+
+  it('extracts numbered consignee name from additional requirement block', () => {
+    const details = parseGemBidPdfText(GEM_NUMBERED_CONSIGNEE_PDF);
+    expect(details.consigneeOfficer).toBe('Jay Prakash Kumar');
+    expect(details.additionalRequirements).toContain('Basic Pay');
+    expect(details.additionalRequirements.toLowerCase()).not.toContain('jay prakash');
+  });
+
   it('extracts ministry, organisation, consignee, and strips officer from additional requirements', () => {
     const details = parseGemBidPdfText(ESIC_MANPOWER_PDF);
     expect(details.ministry.toLowerCase()).toContain('labour');

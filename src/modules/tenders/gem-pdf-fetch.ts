@@ -1,4 +1,4 @@
-import { extractPdfText } from '../pdf/extractor';
+import { extractPageTextWithLines, extractPdfText } from '../pdf/extractor';
 import { postDebugLog } from '../../shared/utils/messaging';
 
 const MIN_EXTRACTED_TEXT_LEN = 40;
@@ -63,9 +63,7 @@ async function extractPdfTextFromBuffer(buffer: ArrayBuffer): Promise<string> {
   for (let i = 1; i <= pdf.numPages; i += 1) {
     const page = await pdf.getPage(i);
     const content = await page.getTextContent();
-    parts.push(
-      content.items.map((item) => ('str' in item ? item.str : '')).join(' '),
-    );
+    parts.push(extractPageTextWithLines(content as { items: Array<{ str?: string; transform?: number[] }> }));
   }
   const text = parts.join('\n\n').trim();
   if (text.length > 0) return text;

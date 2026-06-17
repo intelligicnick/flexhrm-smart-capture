@@ -1,9 +1,5 @@
 import type { ExtractedTender, TenderStatus, TenderType } from '../../shared/types';
-import {
-  extractConsigneeOfficer,
-  extractMinistry,
-  extractOrganisation,
-} from './gem-pdf-parser';
+import { parseGemOrganisationFromText } from './gem-pdf-parser';
 
 const BID_NO_RE = /GEM\/\d{4}\/B\/\d+/gi;
 
@@ -88,24 +84,21 @@ function parseGemOrganisationFields(text: string): {
   address: string;
   department: string;
   officerName: string;
+  additionalRequirements: string;
 } {
-  const raw = text;
-  const flat = text.replace(/\s+/g, ' ').trim();
-  const ministry = extractMinistry(raw, flat);
-  const organisation = extractOrganisation(raw, flat);
-  const consigneeOfficer = extractConsigneeOfficer(raw, flat);
-  const address =
-    extractLabelValue(text, ['Consignee Address', 'Consignee Location', 'Delivery Location', 'Address']) ||
-    '';
+  const fields = parseGemOrganisationFromText(text);
 
-  if (ministry || organisation || consigneeOfficer || address) {
+  if (
+    fields.ministry ||
+    fields.organisation ||
+    fields.consigneeOfficer ||
+    fields.address ||
+    fields.additionalRequirements
+  ) {
     return {
-      ministry,
-      organisation,
-      consigneeOfficer,
-      address,
-      department: organisation,
-      officerName: consigneeOfficer,
+      ...fields,
+      department: fields.organisation,
+      officerName: fields.consigneeOfficer,
     };
   }
 
@@ -117,6 +110,7 @@ function parseGemOrganisationFields(text: string): {
     address: legacy.address,
     department: legacy.department,
     officerName: legacy.officerName,
+    additionalRequirements: '',
   };
 }
 
@@ -343,7 +337,7 @@ function parseTenderCard(card: HTMLElement, sourceUrl: string): ExtractedTender 
     tenderType,
     quantity: parseQuantityNumber(gemQuantity),
     rate: '',
-    additionalRequirements: '',
+    additionalRequirements: orgFields.additionalRequirements,
     endDate: gemEndDate,
     startDate: gemStartDate,
     filedDate: '',
