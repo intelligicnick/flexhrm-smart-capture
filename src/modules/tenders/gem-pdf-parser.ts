@@ -12,7 +12,7 @@ export interface GemPdfDetails {
 }
 
 const GEM_LABEL_BREAK_RE =
-  /\s+(?=(?:Ministry\/State Name|Ministry \/ State Name|Organisation Name|Organization Name|\/Organisation Name|Item Category|Consignee Reporting\/Officer|Consignee Reporting Officer|Additional Requirement|Address:|Estimated Bid|Bid Number|Bid End|Pre[- ]?Bid|Quantity|S\.?\s*No\.?))/gi;
+  /\s+(?=(?:Ministry\/State Name|Ministry \/ State Name|Department Name|Organisation Name|Organization Name|\/Organisation Name|Office Name|Item Category|Consignee Reporting\/Officer|Consignee Reporting Officer|Consignees\/Reporting|Additional Requirements?|Address:|Estimated Bid|Bid Number|Bid End|Pre[- ]?Bid|Quantity|S\.?\s*No\.?|\/Beneficiary))/gi;
 
 /** Rebuild GeM PDF structure when text is flattened or labels are split across lines. */
 export function normalizeGemPdfText(text: string): string {
@@ -62,7 +62,27 @@ const FIELD_BOUNDARY_RE =
 function cleanFieldValue(value: string): string {
   const trimmed = stripPdfNoise(value);
   const cut = trimmed.split(FIELD_BOUNDARY_RE)[0]?.trim() ?? trimmed;
-  return cut.replace(/\s{2,}/g, ' ').trim();
+  return polishFieldValue(cut);
+}
+
+function polishFieldValue(value: string): string {
+  return value
+    .replace(/\s{2,}/g, ' ')
+    .replace(/[%\/\s]+$/g, '')
+    .replace(/^[%\/\s]+/g, '')
+    .trim();
+}
+
+function buildAsciiFlat(text: string): string {
+  return stripPdfNoise(text).replace(/\n+/g, ' ').trim();
+}
+
+function escapeRegexLabel(label: string): string {
+  return label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\//g, '\\/?');
+}
+
+function buildStopLabelPattern(stopLabels: string[]): string {
+  return stopLabels.map((l) => escapeRegexLabel(l)).join('|');
 }
 
 function isPlausibleFieldValue(value: string, minLen = 4): boolean {
@@ -73,13 +93,16 @@ function isPlausibleFieldValue(value: string, minLen = 4): boolean {
   return true;
 }
 
-function extractAddress(raw: string, flat: string): string {
+function extractAddress(raw: string, flat: string, asciiFlat = buildAsciiFlat(raw)): string {
+  const tableRow = extractConsigneeFromTable(asciiFlat);
+  if (tableRow.address) return tableRow.address;
+
   const patterns = [
     /(?:^|[\n,])\s*address\s*:\s*([^,\n]+(?:,\s*[^,\n]+){0,10}?)(?=\s*,\s*(?:additional requirement|estimated|consignee|bid number|item category|tenure|s\.?\s*no)|\s*$)/i,
     /address\s*:\s*([^,\n]+(?:,\s*[^,\n]+){0,10}?)(?=\s+additional\s+requirement|\s+estimated|\s+consignee|\s*$)/i,
   ];
 
-  for (const source of [raw, flat]) {
+  for (const source of [asciiFlat, raw, flat].filter(Boolean)) {
     for (const pattern of patterns) {
       const match = source.match(pattern);
       const value = cleanFieldValue(match?.[1] ?? '');
@@ -89,8 +112,11 @@ function extractAddress(raw: string, flat: string): string {
 
   const labeled =
     extractStrictLabel(raw, ['Consignee Address', 'Consignee Location', 'Delivery Location']) ||
-    extractStrictLabel(flat, ['Consignee Address', 'Consignee Location', 'Delivery Location']);
-  return labeled;
+    extractStrictLabel(flat, ['Consignee Address', 'Consignee Location', 'Delivery Location']) ||
+    extractStrictLabel(asciiFlat, ['Consignee Address', 'Consignee Location', 'Delivery Location']);
+  if (labeled) return labeled;
+
+  return extractFromBeneficiary(asciiFlat).address;
 }
 
 export { extractAddress };
@@ -341,28 +367,67 @@ function extractNumberedConsigneeName(text: string): string {
   return cleanPersonName(match?.[1] ?? '');
 }
 
+function extractConsigneeFromTable(asciiFlat: string): { officer: string; address: string } {
+  const rowRe =
+    /(?:Additional Requirements?\s+\d+\s*\/\s*\d+\s+)?(\d+)\s+([A-Z][A-Za-z]+(?:\s+[A-Za-z.'-]+){0,4})\s+(\d{6}),(.+?)(?=\s+\d+\s+Tenure\/)/i;
+  const match = asciiFlat.match(rowRe);
+  if (!match) return { officer: '', address: '' };
+
+  const officer = cleanPersonName(match[2]);
+  const address = polishFieldValue(`${match[3]},${match[4]}`);
+  return { officer, address };
+}
+
+function extractFromBeneficiary(asciiFlat: string): { officer: string; address: string } {
+  const match = asciiFlat.match(
+    /\/Beneficiary\s*:\s*(.+?)(?=\s+Bid splitting|\s+MII Compliance|\s+MSE Purchase|$)/i,
+  );
+  if (!match?.[1]) return { officer: '', address: '' };
+
+  const block = polishFieldValue(match[1]);
+  const nameMatch = block.match(/\(([A-Za-z][A-Za-z\s.'-]+)\)\s*$/);
+  const officer = cleanPersonName(nameMatch?.[1] ?? '');
+  const address = polishFieldValue(block.replace(/\s*\([^)]+\)\s*$/, ''));
+  return { officer, address };
+}
+
+function extractManpowerTermsBlocks(asciiFlat: string): string {
+  const re =
+    /Tenure\/\s*Duration of Employment \(in months\)\s*:\s*\d+.+?Number of working days in a month\s*:\s*\d+/gi;
+  const blocks = [...asciiFlat.matchAll(re)]
+    .map((m) => polishFieldValue(m[0]))
+    .filter((block) => /basic pay/i.test(block));
+  return [...new Set(blocks)].join('\n\n');
+}
+
+function extractBuyerAdditionalNotes(asciiFlat: string): string {
+  const match = asciiFlat.match(
+    /Additional Requirements for[^]+?(?=\/Addon\(s\)|Addon\(s\)|Consignees\/Reporting|\/S\.N|$)/i,
+  );
+  return match ? polishFieldValue(match[0]) : '';
+}
+
 function extractGemLabeledField(
   raw: string,
   flat: string,
   labels: string[],
   stopLabels: string[],
+  asciiFlat = '',
 ): string {
-  const stopSource = stopLabels.map((l) => l.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
-  const stopRe = stopSource
-    ? new RegExp(`\\s+(?:${stopSource})\\s*${OPTIONAL_LABEL_SEP}`, 'i')
-    : null;
+  const stop = buildStopLabelPattern(stopLabels);
+  const stopLookahead = stop
+    ? `(?=\\s+\\/?(?:${stop})|$)`
+    : '$';
 
   for (const label of labels) {
-    const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const escaped = escapeRegexLabel(label);
     const patterns = [
       new RegExp(`${escaped}\\s*[:\\-–]\\s*([^\\n]{2,250})`, 'i'),
       new RegExp(`${escaped}\\s*\\n\\s*([^\\n]{2,250})`, 'i'),
-      stopRe
-        ? new RegExp(`${escaped}\\s+([^\\n]{2,250}?)(?=${stopRe.source}|$)`, 'i')
-        : new RegExp(`${escaped}\\s+([^\\n]{2,250})`, 'i'),
+      new RegExp(`${escaped}\\s+(.+?)${stopLookahead}`, 'i'),
     ];
 
-    for (const source of [raw, flat]) {
+    for (const source of [asciiFlat, raw, flat].filter(Boolean)) {
       for (const pattern of patterns) {
         const match = source.match(pattern);
         const rawValue = match?.[1]?.trim();
@@ -375,32 +440,54 @@ function extractGemLabeledField(
   return '';
 }
 
-export function extractMinistry(raw: string, flat: string): string {
+export function extractMinistry(raw: string, flat: string, asciiFlat = buildAsciiFlat(raw)): string {
   return extractGemLabeledField(
     raw,
     flat,
     ['Ministry/State Name', 'Ministry / State Name', 'Ministry Name', 'Ministry/State'],
-    ['Organisation Name', 'Organization Name', 'Item Category', 'Consignee'],
+    ['Department Name', 'Organisation Name', 'Organization Name', 'Office Name', 'Item Category', 'Consignee'],
+    asciiFlat,
   );
 }
 
-export function extractOrganisation(raw: string, flat: string): string {
-  return extractGemLabeledField(
+export function extractOrganisation(
+  raw: string,
+  flat: string,
+  asciiFlat = buildAsciiFlat(raw),
+): string {
+  const organisation = extractGemLabeledField(
     raw,
     flat,
     ['Organisation Name', 'Organization Name'],
-    ['Item Category', 'Consignee', 'Ministry/State', 'Additional Requirement', 'Bid End'],
+    ['Office Name', 'Item Category', 'Consignee', 'Contact details', 'Additional Requirement', 'Bid End'],
+    asciiFlat,
+  );
+  if (organisation) return organisation;
+
+  return extractGemLabeledField(
+    raw,
+    flat,
+    ['Department Name'],
+    ['Organisation Name', 'Organization Name', 'Office Name', 'Item Category', 'Consignee', 'Contact details'],
+    asciiFlat,
   );
 }
 
-export function extractConsigneeOfficer(raw: string, flat: string): string {
+export function extractConsigneeOfficer(
+  raw: string,
+  flat: string,
+  asciiFlat = buildAsciiFlat(raw),
+): string {
+  const tableRow = extractConsigneeFromTable(asciiFlat);
+  if (tableRow.officer) return tableRow.officer;
+
   const patterns = [
     /consignee\s+reporting\s*\/?\s*officer\s*:\s*([A-Za-z][A-Za-z\s.'-]{1,80}?)(?=\s*,\s*address\s*:|\s+address\s*:|\s*,|\s*$)/i,
     /consignee\s+reporting\s*\/?\s*officer\s*[:\-–]?\s*([A-Za-z][A-Za-z\s.'-]{1,80}?)(?=\s+address\s*[:\-–]|\n|$)/i,
     /consignee\s+reporting\s*\/?\s*officer\s*\n\s*([A-Za-z][A-Za-z\s.'-]{1,80})/i,
   ];
 
-  for (const source of [raw, flat]) {
+  for (const source of [asciiFlat, raw, flat]) {
     for (const pattern of patterns) {
       const match = source.match(pattern);
       const name = cleanPersonName(match?.[1] ?? '');
@@ -416,8 +503,12 @@ export function extractConsigneeOfficer(raw: string, flat: string): string {
     flat,
     ['Consignee Reporting/Officer', 'Consignee Reporting Officer', 'Consignee Officer'],
     ['Address', 'Additional Requirement', 'Tenure', 'Basic Pay', 'Estimated'],
+    asciiFlat,
   );
-  return cleanPersonName(fromLabel);
+  const cleaned = cleanPersonName(fromLabel);
+  if (cleaned) return cleaned;
+
+  return extractFromBeneficiary(asciiFlat).officer;
 }
 
 function stripConsigneeLinesFromBlock(block: string): string {
@@ -501,24 +592,30 @@ export function parseGemOrganisationFromText(text: string): {
 } {
   const raw = normalizeGemPdfText(text);
   const flat = raw.replace(/\s+/g, ' ').trim();
+  const asciiFlat = buildAsciiFlat(raw);
   const addReqBlock = extractAdditionalRequirements(raw, flat);
 
-  let consigneeOfficer = extractConsigneeOfficer(raw, flat);
+  let consigneeOfficer = extractConsigneeOfficer(raw, flat, asciiFlat);
   if (!consigneeOfficer) {
     consigneeOfficer = addReqBlock.consigneeOfficer;
   }
 
-  let address = extractAddress(raw, flat);
+  let address = extractAddress(raw, flat, asciiFlat);
   if (!address) {
     address = addReqBlock.address;
   }
 
+  let additionalRequirements = addReqBlock.additionalRequirements;
+  if (!additionalRequirements) {
+    additionalRequirements = extractManpowerTermsBlocks(asciiFlat);
+  }
+
   return {
-    ministry: extractMinistry(raw, flat),
-    organisation: extractOrganisation(raw, flat),
+    ministry: extractMinistry(raw, flat, asciiFlat),
+    organisation: extractOrganisation(raw, flat, asciiFlat),
     consigneeOfficer,
     address,
-    additionalRequirements: addReqBlock.additionalRequirements,
+    additionalRequirements,
   };
 }
 
@@ -537,18 +634,21 @@ function formatIndianRupee(numStr: string): string {
 
 function extractRate(raw: string, flat: string): string {
   const inrInclusive =
-    flat.match(/in\s+INR\s*\([^)]*inclusive[^)]*\)\s*([\d,]+)/i) ||
-    raw.match(/in\s+INR\s*\([^)]*inclusive[^)]*\)\s*\n\s*([\d,]+)/i);
-  if (inrInclusive?.[1]) return formatIndianRupee(inrInclusive[1]);
+    flat.match(/in\s+INR\s*\([^)]*inclusive[^)]*\)\s*([\d,.]+)/i) ||
+    raw.match(/in\s+INR\s*\([^)]*inclusive[^)]*\)\s*\n\s*([\d,.]+)/i);
+  if (inrInclusive?.[1]) return formatIndianRupee(inrInclusive[1].replace(/\.\d+$/, ''));
 
   const estimatedBlock =
     raw.match(
-      /Estimated\s+Bid\s+Value\s*\n\s*in\s+INR[^\n]*\n\s*([\d,]+)/i,
+      /Estimated\s+Bid\s+Value\s*\n\s*in\s+INR[^\n]*\n\s*([\d,.]+)/i,
     ) ||
     flat.match(
-      /Estimated\s+Bid\s+Value[^0-9]{0,120}([\d,]{4,})/i,
+      /Estimated\s+Bid\s+Value[^0-9]{0,120}([\d,.]{4,})/i,
     );
-  if (estimatedBlock?.[1]) return formatIndianRupee(estimatedBlock[1]);
+  if (estimatedBlock?.[1]) {
+    const digits = estimatedBlock[1].replace(/,/g, '').replace(/\.\d+$/, '');
+    return formatIndianRupee(digits);
+  }
 
   const labeled =
     extractAfterLabel(raw, [
@@ -567,8 +667,8 @@ function extractRate(raw: string, flat: string): string {
       'Contract Value',
     ]);
   if (labeled) {
-    const amount = labeled.match(/([\d,]{4,})/);
-    if (amount?.[1]) return formatIndianRupee(amount[1]);
+    const amount = labeled.match(/([\d,.]{4,})/);
+    if (amount?.[1]) return formatIndianRupee(amount[1].replace(/,/g, '').replace(/\.\d+$/, ''));
     const rupee = labeled.match(/(?:Rs\.?|INR|₹)\s*([\d,]+(?:\.\d{1,2})?)/i);
     if (rupee?.[1]) return `Rs. ${rupee[1]}`;
     return stripPdfNoise(labeled);
@@ -609,6 +709,7 @@ export function formatPreBidDisplay(preBidAt: string, preBidAddress: string): st
 export function parseGemBidPdfText(text: string): GemPdfDetails {
   const raw = normalizeGemPdfText(text.replace(/\r/g, '\n'));
   const flat = raw.replace(/\s+/g, ' ').trim();
+  const asciiFlat = buildAsciiFlat(raw);
 
   let preBidAt = extractPreBidDateTime(raw, flat);
   const tableRow = extractFromPreBidTableRow(flat);
@@ -622,28 +723,34 @@ export function parseGemBidPdfText(text: string): GemPdfDetails {
 
   const addReqBlock = extractAdditionalRequirements(raw, flat);
 
-  const ministry = extractMinistry(raw, flat);
+  const ministry = extractMinistry(raw, flat, asciiFlat);
+  const organisation = extractOrganisation(raw, flat, asciiFlat);
 
-  const organisation = extractOrganisation(raw, flat);
-
-  let consigneeOfficer = extractConsigneeOfficer(raw, flat);
+  let consigneeOfficer = extractConsigneeOfficer(raw, flat, asciiFlat);
   if (!consigneeOfficer && addReqBlock.consigneeOfficer) {
     consigneeOfficer = addReqBlock.consigneeOfficer;
   }
 
-  let address = extractAddress(raw, flat);
+  let address = extractAddress(raw, flat, asciiFlat);
   if (!address && addReqBlock.address) {
     address = addReqBlock.address;
   }
 
+  let additionalRequirements = addReqBlock.additionalRequirements;
+  if (!additionalRequirements) {
+    additionalRequirements = extractManpowerTermsBlocks(asciiFlat);
+  }
+
+  const rate = '';
+  const description = extractBuyerAdditionalNotes(asciiFlat);
   const noPreBid = detectNoPreBid(raw, flat, preBidAt, preBidAddress);
 
   return {
     preBidAt: preBidAt.trim(),
     preBidAddress: preBidAddress.trim(),
-    rate: '',
-    additionalRequirements: addReqBlock.additionalRequirements,
-    description: '',
+    rate,
+    additionalRequirements,
+    description,
     ministry,
     organisation,
     consigneeOfficer,

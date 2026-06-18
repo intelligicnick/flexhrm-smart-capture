@@ -69,6 +69,7 @@ export function applyPdfDetailsToTender(
       details.consigneeOfficer,
     ),
     address: applyPdfField(tender.address, details.address),
+    description: applyPdfField(tender.description, details.description),
     additionalRequirements: applyPdfField(
       tender.additionalRequirements,
       details.additionalRequirements,

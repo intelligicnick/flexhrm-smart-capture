@@ -120,7 +120,24 @@ export function injectGemSelectionUi(): void {
 const BAR_ID = 'flexhrm-gem-selection-bar';
 
 function ensureSelectionBar(): void {
-  if (document.getElementById(BAR_ID)) return;
+  if (document.getElementById(BAR_ID)) {
+    if (!document.getElementById('flexhrm-gem-sync-btn')) {
+      const pullBtn = document.getElementById('flexhrm-gem-pull-btn');
+      const syncBtn = document.createElement('button');
+      syncBtn.type = 'button';
+      syncBtn.id = 'flexhrm-gem-sync-btn';
+      syncBtn.style.cssText = `
+        background:#059669;color:#fff;border:none;border-radius:8px;
+        padding:8px 14px;font-weight:700;cursor:pointer;font-size:12px;
+      `;
+      syncBtn.textContent = 'Sync Status';
+      syncBtn.addEventListener('click', () => {
+        document.dispatchEvent(new CustomEvent('flexhrm:sync-selected-tender-statuses'));
+      });
+      pullBtn?.parentElement?.insertBefore(syncBtn, pullBtn);
+    }
+    return;
+  }
 
   const bar = document.createElement('div');
   bar.id = BAR_ID;
@@ -133,6 +150,10 @@ function ensureSelectionBar(): void {
   `;
   bar.innerHTML = `
     <span id="flexhrm-gem-selection-count">0 selected</span>
+    <button type="button" id="flexhrm-gem-sync-btn" style="
+      background:#059669;color:#fff;border:none;border-radius:8px;
+      padding:8px 14px;font-weight:700;cursor:pointer;font-size:12px;
+    ">Sync Status</button>
     <button type="button" id="flexhrm-gem-pull-btn" style="
       background:#2563eb;color:#fff;border:none;border-radius:8px;
       padding:8px 14px;font-weight:700;cursor:pointer;font-size:12px;
@@ -148,12 +169,24 @@ function ensureSelectionBar(): void {
   `;
   document.body.appendChild(bar);
 
+  document.getElementById('flexhrm-gem-sync-btn')?.addEventListener('click', () => {
+    document.dispatchEvent(new CustomEvent('flexhrm:sync-selected-tender-statuses'));
+  });
   document.getElementById('flexhrm-gem-pull-btn')?.addEventListener('click', () => {
     requestOpenSidePanel();
     document.dispatchEvent(new CustomEvent('flexhrm:pull-selected-tenders'));
   });
   document.getElementById('flexhrm-gem-select-all')?.addEventListener('click', selectAllGemTenders);
   document.getElementById('flexhrm-gem-clear-selection')?.addEventListener('click', clearGemSelection);
+}
+
+export function setGemSyncLoading(loading: boolean): void {
+  const syncBtn = document.getElementById('flexhrm-gem-sync-btn') as HTMLButtonElement | null;
+  if (!syncBtn) return;
+  const count = selectedBids.size;
+  syncBtn.disabled = loading || count === 0;
+  syncBtn.style.opacity = syncBtn.disabled ? '0.5' : '1';
+  syncBtn.textContent = loading ? `Syncing (${count})…` : count > 0 ? `Sync Status (${count})` : 'Sync Status';
 }
 
 export function setGemPullLoading(loading: boolean): void {
@@ -173,6 +206,7 @@ export function setGemPullLoading(loading: boolean): void {
 function updateSelectionBar(): void {
   const countEl = document.getElementById('flexhrm-gem-selection-count');
   const pullBtn = document.getElementById('flexhrm-gem-pull-btn') as HTMLButtonElement | null;
+  const syncBtn = document.getElementById('flexhrm-gem-sync-btn') as HTMLButtonElement | null;
   const count = selectedBids.size;
   if (countEl) countEl.textContent = `${count} selected`;
   if (pullBtn && !pullBtn.textContent?.includes('Reading PDFs')) {
@@ -180,5 +214,10 @@ function updateSelectionBar(): void {
     pullBtn.style.opacity = count === 0 ? '0.5' : '1';
     pullBtn.textContent =
       count > 0 ? `Pull & Read PDFs (${count})` : 'Pull & Read PDFs';
+  }
+  if (syncBtn && !syncBtn.textContent?.includes('Syncing')) {
+    syncBtn.disabled = count === 0;
+    syncBtn.style.opacity = count === 0 ? '0.5' : '1';
+    syncBtn.textContent = count > 0 ? `Sync Status (${count})` : 'Sync Status';
   }
 }

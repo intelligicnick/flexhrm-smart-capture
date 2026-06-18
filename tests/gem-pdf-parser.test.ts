@@ -92,7 +92,35 @@ Address: ESIC Hospital Korba
 Estimated Bid Value in INR 500000
 `;
 
+const GEM_POSTS_BILINGUAL_PDF = `
+Bid End Date/Time 18-06-2026 12:00:00
+Ministry/State Name Ministry Of Communications
+Department Name Department Of Posts
+Organisation Name Department Of Posts
+Office Name 110001
+Item Category Security Manpower Service (Version 2.0)
+Estimated Bid Value in INR (Inclusive of all taxes) 18436646.43
+Beneficiary : Sr Supdt of Post Offices 110001, Department of Posts, Department of Posts, Ministry of Communications (Twinkle Singh)
+Additional Requirements for the Security Personnel DGR registered Security Agency Is Geographical presence of the Service Provider registered office is required in the consignee's State Yes
+Consignees/Reporting Officer and Quantity
+Additional Requirement 5 / 10 1 Twinkle Singh 110021,Sr. Supdt of Post offices, New Delhi South West Division, Chanakya Puri, New Delhi -110021 15 Tenure/ Duration of Employment (in months) : 24 Basic Pay (Minimum daily wage) : 1094 Provident Fund (INR per day) : 69.23 EDLI (INR per day) : 2.88 ESI (INR per day) : 0 EPF Admin charge (INR per day) : 2.88 Bonus (INR per day) : 0 Optional Allowance 1 (in Rupees) : 194.83 Optional Allowance 2 (in Rupees) : 0 Optional Allowance 3 (in Rupees) : 0 Number of working days in a month : 26
+`;
+
 describe('GeM PDF parser', () => {
+  it('extracts bilingual GeM bid PDF fields (Department of Posts sample)', () => {
+    const details = parseGemBidPdfText(GEM_POSTS_BILINGUAL_PDF);
+    expect(details.ministry).toBe('Ministry Of Communications');
+    expect(details.organisation).toBe('Department Of Posts');
+    expect(details.consigneeOfficer).toBe('Twinkle Singh');
+    expect(details.address).toContain('110021');
+    expect(details.address.toLowerCase()).toContain('new delhi');
+    expect(details.rate).toBe('');
+    expect(details.additionalRequirements).toContain('Basic Pay');
+    expect(details.additionalRequirements).toContain('1094');
+    expect(details.description.toLowerCase()).toContain('dgr registered');
+    expect(details.noPreBid).toBe(true);
+  });
+
   it('extracts fields from fully flattened GeM PDF text', () => {
     const details = parseGemBidPdfText(GEM_FLAT_KVS_PDF);
     expect(details.ministry).toContain('Ministry Of Education');

@@ -11,7 +11,9 @@ import {
   getSelectedBidNos,
   injectGemSelectionUi,
   setGemPullLoading,
+  setGemSyncLoading,
 } from '../modules/tenders/gem-selection';
+import { extractSelectedTendersForStatusSync } from '../modules/tenders/gem-status';
 
 const FAB_ID = 'flexhrm-fab';
 const MENU_ID = 'flexhrm-fab-menu';
@@ -150,6 +152,53 @@ function pullSelectedTenders() {
   });
 }
 
+function syncSelectedTenderStatuses() {
+  const tenders = extractSelectedTendersForStatusSync();
+  if (!tenders.length) {
+    alert('No GeM tenders selected. Tick checkboxes on tenders you want to sync.');
+    return;
+  }
+
+  setGemSyncLoading(true);
+  void (async () => {
+    const response = await sendExtensionMessage<{
+      success?: boolean;
+      error?: string;
+      updated?: number;
+      notFound?: number;
+      errors?: string[];
+    }>({
+      type: 'SYNC_TENDER_STATUSES',
+      payload: { tenders },
+    });
+
+    setGemSyncLoading(false);
+
+    if (!response) {
+      alert(
+        'FlexHRM extension is not responding. Open chrome://extensions and click Reload on FlexHRM Smart Capture.',
+      );
+      return;
+    }
+    if (!response.success) {
+      alert(response.error || 'Status sync failed. Check extension settings and try again.');
+      return;
+    }
+
+    const updated = Number(response.updated) || 0;
+    const notFound = Number(response.notFound) || 0;
+    const errors = Array.isArray(response.errors) ? response.errors : [];
+    let msg = `Synced status for ${updated} tender(s) in FlexHRM.`;
+    if (notFound > 0) {
+      msg += ` ${notFound} bid(s) not found — import them first with Pull & Read PDFs.`;
+    }
+    if (errors.length > 0) {
+      msg += ` ${errors.length} error(s).`;
+    }
+    showGemToast(msg);
+  })();
+}
+
 function setupGemListingUi() {
   if (!isGemListingPage()) return;
   injectGemSelectionUi();
@@ -188,6 +237,10 @@ function toggleMenu() {
     {
       label: `Pull Selected (${getSelectedBidNos().length || 0})`,
       action: () => pullSelectedTenders(),
+    },
+    {
+      label: `Sync Status (${getSelectedBidNos().length || 0})`,
+      action: () => syncSelectedTenderStatuses(),
     },
     { label: 'Open Review Panel', action: () => requestOpenSidePanel() },
   ];
@@ -232,6 +285,7 @@ function init() {
   createFab();
   setupGemListingUi();
   document.addEventListener('flexhrm:pull-selected-tenders', pullSelectedTenders);
+  document.addEventListener('flexhrm:sync-selected-tender-statuses', syncSelectedTenderStatuses);
 
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   const observer = new MutationObserver(() => {

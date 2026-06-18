@@ -1,0 +1,104 @@
+import { describe, expect, it } from 'vitest';
+import {
+  buildGemCurrentStage,
+  extractProcessStatus,
+  mapTechnicalResult,
+  parseGemCardStatus,
+  parseProgressStages,
+} from '../src/modules/tenders/gem-status';
+
+const TECH_IN_PROGRESS_CARD = `
+BID NO GEM/2026/B/7491457
+Status: Technical Evaluation
+Bid/RA Status: Active
+Items Manpower Outsourcing Services
+Quantity 18
+Department Name And Address Ministry of Power
+Start Date 02-05-2026 2:09 PM
+End Date 23-05-2026 2:00 PM
+TECHNICAL EVALUATION
+FINANCIAL EVALUATION
+BID AWARD
+`;
+
+const QUALIFIED_AWARDED_CARD = `
+BID NO GEM/2026/B/7495680
+Status: Bid Award
+Bid/RA Status: Active
+Items Manpower Outsourcing Services
+Quantity 3
+Technical Status Qualified
+Department Name And Address Ministry of Education
+Start Date 02-05-2026 12:57 PM
+End Date 22-05-2026 1:00 PM
+TECHNICAL EVALUATION
+FINANCIAL EVALUATION
+BID AWARD
+`;
+
+const DISQUALIFIED_CARD = `
+BID NO GEM/2021/B/1526721
+Status: Bid Award
+Bid/RA Status: Active
+Technical Status Disqualified
+Items Manpower Outsourcing Services
+Quantity 5
+TECHNICAL EVALUATION
+FINANCIAL EVALUATION
+BID AWARD
+`;
+
+describe('GeM listing status parsing', () => {
+  it('extracts process status without Bid/RA Status', () => {
+    expect(extractProcessStatus(TECH_IN_PROGRESS_CARD)).toBe('Technical Evaluation');
+    expect(extractProcessStatus(QUALIFIED_AWARDED_CARD)).toBe('Bid Award');
+  });
+
+  it('maps technical result to user outcome only', () => {
+    expect(mapTechnicalResult('Qualified')).toEqual({
+      status: 'technical_qualified',
+      outcome: 'Qualified',
+    });
+    expect(mapTechnicalResult('Disqualified')).toEqual({
+      status: 'disqualified',
+      outcome: 'Disqualified',
+    });
+  });
+
+  it('parses technical-in-progress card as participated with stage in progress', () => {
+    document.body.innerHTML = `<div class="card">${TECH_IN_PROGRESS_CARD}</div>`;
+    const card = document.querySelector('.card') as HTMLElement;
+    const status = parseGemCardStatus(card);
+    expect(status.status).toBe('filed');
+    expect(status.outcome).toBe('Participated');
+    expect(status.gemCurrentStage.toLowerCase()).toContain('technical evaluation');
+    expect(status.gemCurrentStage.toLowerCase()).toContain('in progress');
+    expect(status.status).not.toBe('won_bid');
+  });
+
+  it('parses qualified + bid award as qualified, not won', () => {
+    document.body.innerHTML = `<div class="card">${QUALIFIED_AWARDED_CARD}</div>`;
+    const card = document.querySelector('.card') as HTMLElement;
+    const status = parseGemCardStatus(card);
+    expect(status.status).toBe('technical_qualified');
+    expect(status.outcome).toBe('Qualified');
+    expect(status.gemCurrentStage.toLowerCase()).toContain('bid award');
+    expect(status.status).not.toBe('won_bid');
+  });
+
+  it('parses disqualified technical status', () => {
+    document.body.innerHTML = `<div class="card">${DISQUALIFIED_CARD}</div>`;
+    const card = document.querySelector('.card') as HTMLElement;
+    const status = parseGemCardStatus(card);
+    expect(status.status).toBe('disqualified');
+    expect(status.outcome).toBe('Disqualified');
+  });
+
+  it('builds stage chain from header when colors are unavailable', () => {
+    document.body.innerHTML = `<div class="card">${QUALIFIED_AWARDED_CARD}</div>`;
+    const card = document.querySelector('.card') as HTMLElement;
+    const stages = parseProgressStages(card, 'Bid Award');
+    expect(stages.some((s) => /bid award \(completed\)/i.test(s))).toBe(true);
+    expect(buildGemCurrentStage(card, 'Bid Award')).toContain('→');
+  });
+});
