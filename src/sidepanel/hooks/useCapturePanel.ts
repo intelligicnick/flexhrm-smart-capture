@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { CaptureDraft, DuplicateMatch, TenderCaptureBatch } from '../../shared/types';
+import type { CaptureDraft, ContractCaptureBatch, DuplicateMatch, TenderCaptureBatch } from '../../shared/types';
 import type { CaptureStoreKind } from '../../shared/services/capture-store';
 import {
   clearCaptureStore,
@@ -13,11 +13,12 @@ import {
   saveDraft,
 } from '../../shared/services/storage';
 import { getTenderBatches } from '../../shared/services/tender-storage';
+import { getContractBatches } from '../../shared/services/contract-storage';
 import { confirmDeleteAll, confirmDeleteOne } from '../../shared/utils/confirm-delete';
 import { getDraftTitle } from '../../shared/utils/draft-display';
 import { EXTENSION_EVENT_KEY, sendExtensionMessage } from '../../shared/utils/messaging';
 
-export type PanelTab = 'review' | 'tenders' | 'drafts' | 'history' | 'queue';
+export type PanelTab = 'review' | 'tenders' | 'contracts' | 'drafts' | 'history' | 'queue';
 
 export function useCapturePanel() {
   const [tab, setTab] = useState<PanelTab>('review');
@@ -26,6 +27,7 @@ export function useCapturePanel() {
   const [queueCount, setQueueCount] = useState(0);
   const [activeDraft, setActiveDraft] = useState<CaptureDraft | null>(null);
   const [tenderBatch, setTenderBatch] = useState<TenderCaptureBatch | null>(null);
+  const [contractBatch, setContractBatch] = useState<ContractCaptureBatch | null>(null);
   const [duplicates, setDuplicates] = useState<DuplicateMatch[]>([]);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
@@ -34,11 +36,12 @@ export function useCapturePanel() {
   activeDraftIdRef.current = activeDraft?.id ?? null;
 
   const refresh = useCallback(async () => {
-    const [nextDrafts, nextHistory, queue, tenderBatches] = await Promise.all([
+    const [nextDrafts, nextHistory, queue, tenderBatches, contractBatches] = await Promise.all([
       getDrafts(),
       getHistory(),
       getQueue(),
       getTenderBatches(),
+      getContractBatches(),
     ]);
 
     setDrafts(nextDrafts);
@@ -48,7 +51,12 @@ export function useCapturePanel() {
     const latestBatch = tenderBatches[0] ?? null;
     setTenderBatch(latestBatch);
 
-    if (latestBatch && latestBatch.status !== 'saved') {
+    const latestContractBatch = contractBatches[0] ?? null;
+    setContractBatch(latestContractBatch);
+
+    if (latestContractBatch && latestContractBatch.status !== 'saved') {
+      setTab('contracts');
+    } else if (latestBatch && latestBatch.status !== 'saved') {
       setTab('tenders');
     }
 
@@ -61,7 +69,7 @@ export function useCapturePanel() {
       return;
     }
 
-    if (nextDrafts[0] && !latestBatch) {
+    if (nextDrafts[0] && !latestBatch && !latestContractBatch) {
       setActiveDraft(nextDrafts[0]);
     }
   }, []);
@@ -182,6 +190,8 @@ export function useCapturePanel() {
     activeDraft,
     tenderBatch,
     setTenderBatch,
+    contractBatch,
+    setContractBatch,
     duplicates,
     saving,
     message,

@@ -1,4 +1,5 @@
-#flexhrm-fab {
+#flexhrm-fab,
+#flexhrm-fab-fulfilment {
   position: fixed;
   bottom: 24px;
   right: 24px;
@@ -18,12 +19,14 @@
   transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 
-#flexhrm-fab:hover {
+#flexhrm-fab:hover,
+#flexhrm-fab-fulfilment:hover {
   transform: scale(1.06);
   box-shadow: 0 12px 28px rgba(255, 121, 26, 0.35);
 }
 
-#flexhrm-fab.loading {
+#flexhrm-fab.loading,
+#flexhrm-fab-fulfilment.loading {
   opacity: 0.7;
   pointer-events: none;
   animation: flexhrm-pulse 1s ease-in-out infinite;
@@ -34,7 +37,8 @@
   50% { transform: scale(0.95); }
 }
 
-#flexhrm-fab-menu {
+#flexhrm-fab-menu,
+#flexhrm-fab-fulfilment-menu {
   position: fixed;
   bottom: 90px;
   right: 24px;
@@ -47,7 +51,8 @@
   font-family: system-ui, -apple-system, sans-serif;
 }
 
-#flexhrm-fab-menu button {
+#flexhrm-fab-menu button,
+#flexhrm-fab-fulfilment-menu button {
   display: block;
   width: 100%;
   text-align: left;
@@ -60,11 +65,13 @@
   color: #1e293b;
 }
 
-#flexhrm-fab-menu button:hover:not(:disabled) {
+#flexhrm-fab-menu button:hover:not(:disabled),
+#flexhrm-fab-fulfilment-menu button:hover:not(:disabled) {
   background: #f1f5f9;
 }
 
-#flexhrm-fab-menu button:disabled {
+#flexhrm-fab-menu button:disabled,
+#flexhrm-fab-fulfilment-menu button:disabled {
   opacity: 0.6;
   cursor: wait;
 }

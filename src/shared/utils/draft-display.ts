@@ -13,6 +13,7 @@ const CAPTURE_TYPE_LABELS: Record<CaptureType, string> = {
   resume: 'Resume',
   'gem-tender': 'GeM tender',
   'gem-tenders': 'GeM tenders',
+  'gem-contracts': 'GeM contracts',
 };
 
 export function formatCaptureType(type: CaptureType): string {

@@ -35,6 +35,12 @@ export default defineManifest({
       css: ['src/content/content.css'],
       run_at: 'document_idle',
     },
+    {
+      matches: ['https://fulfilment.gem.gov.in/*'],
+      js: ['src/content/fulfilment.ts'],
+      css: ['src/content/content.css'],
+      run_at: 'document_idle',
+    },
   ],
   permissions: [
     'activeTab',
@@ -52,7 +58,7 @@ export default defineManifest({
   web_accessible_resources: [
     {
       resources: ['src/assets/*', 'assets/*'],
-      matches: ['https://bidplus.gem.gov.in/*'],
+      matches: ['https://bidplus.gem.gov.in/*', 'https://fulfilment.gem.gov.in/*'],
     },
   ],
 });

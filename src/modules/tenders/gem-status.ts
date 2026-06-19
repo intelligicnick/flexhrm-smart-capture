@@ -1,5 +1,9 @@
 import type { ExtractedTender, TenderStatus } from '../../shared/types';
-import { findTenderCards } from './gem-extractor';
+import {
+  countBidsInText,
+  extractChunkForBid,
+  findTenderCards,
+} from './gem-extractor';
 import { extractSelectedTenders } from './gem-selection';
 
 export interface GemCardStatus {
@@ -31,6 +35,19 @@ function extractLabelValue(text: string, labels: string[]): string {
   return '';
 }
 
+function readCardText(card: HTMLElement): string {
+  return card.innerText || card.textContent || '';
+}
+
+function normalizeBidAwardHeader(value: string): boolean {
+  const header = value.toLowerCase().replace(/\s+/g, ' ').trim();
+  return (
+    header.includes('bid / ra award') ||
+    header.includes('bid/ra award') ||
+    header.includes('bid award')
+  );
+}
+
 /** GeM header status — not Bid/RA Status. */
 export function extractProcessStatus(cardText: string): string {
   const block = cardText.match(
@@ -40,6 +57,11 @@ export function extractProcessStatus(cardText: string): string {
     const value = block[1].trim();
     if (value && !/bid\/ra/i.test(value)) return value;
   }
+
+  const multiline = cardText.match(
+    /Status\s*:\s*\n\s*(Technical Evaluation|Financial Evaluation|Bid\s*\/?\s*RA\s*Award|Bid Award|Evaluation)/i,
+  );
+  if (multiline?.[1]) return multiline[1].trim();
 
   const inline = cardText.match(
     /Status\s+(Technical Evaluation|Financial Evaluation|Bid\s*\/?\s*RA\s*Award|Bid Award|Evaluation)/i,
@@ -125,26 +147,24 @@ function inferStageStateFromHeader(
 
   if (stage.includes('technical')) {
     if (header.includes('technical evaluation')) return 'in progress';
-    if (header.includes('financial') || header.includes('bid award')) return 'completed';
+    if (header.includes('financial') || normalizeBidAwardHeader(header)) return 'completed';
     return 'pending';
   }
   if (stage.includes('financial')) {
     if (header.includes('financial evaluation')) return 'in progress';
-    if (header.includes('bid award')) return 'completed';
+    if (normalizeBidAwardHeader(header)) return 'completed';
     if (header.includes('technical evaluation')) return 'pending';
     return 'pending';
   }
   if (stage.includes('bid award')) {
-    if (header.includes('bid award') || header.includes('bid / ra award')) {
-      return 'in progress';
-    }
+    if (normalizeBidAwardHeader(header)) return 'in progress';
     return 'pending';
   }
   if (stage.includes('evaluation')) {
     if (header.includes('technical evaluation') || header.includes('evaluation')) {
       return 'in progress';
     }
-    if (header.includes('financial') || header.includes('bid award') || header.includes('bid / ra award')) {
+    if (header.includes('financial') || normalizeBidAwardHeader(header)) {
       return 'completed';
     }
     return 'pending';
@@ -217,8 +237,7 @@ export function deriveStatusFromGemProgress(
   const atBidAwardStage =
     bidAward === 'completed' ||
     bidAward === 'in progress' ||
-    header.includes('bid award') ||
-    header.includes('bid / ra award');
+    normalizeBidAwardHeader(header);
 
   if (atBidAwardStage) {
     return detectSelfBidAward(cardText) ? 'won_bid' : 'qualified';
@@ -241,7 +260,7 @@ export function deriveStatusFromGemProgress(
 }
 
 export function parseProgressStages(card: HTMLElement, processStatus: string): string[] {
-  const cardText = card.innerText.toUpperCase();
+  const cardText = readCardText(card).toUpperCase();
   const lines: string[] = [];
   const stageDefs =
     cardText.includes('TECHNICAL EVALUATION') || cardText.includes('FINANCIAL EVALUATION')
@@ -294,14 +313,15 @@ export function isParticipatedFilterActive(): boolean {
 }
 
 export function parseGemCardStatus(card: HTMLElement): GemCardStatus {
-  const text = card.innerText;
+  const text = readCardText(card);
   const technicalStatus = extractLabelValue(text, ['Technical Status']);
   const processStatus = extractProcessStatus(text);
   const participatedContext =
     isParticipatedFilterActive() ||
     Boolean(technicalStatus) ||
     /\bparticipated\b/i.test(text) ||
-    /technical evaluation|financial evaluation|bid award/i.test(processStatus.toLowerCase());
+    /technical evaluation|financial evaluation/i.test(processStatus.toLowerCase()) ||
+    normalizeBidAwardHeader(processStatus);
 
   const stageLines = parseProgressStages(card, processStatus);
   const gemCurrentStage =
@@ -329,7 +349,7 @@ export function parseGemCardStatus(card: HTMLElement): GemCardStatus {
   } else if (
     bidAward === 'completed' ||
     bidAward === 'in progress' ||
-    /bid award|bid \/ ra award/i.test(processStatus)
+    normalizeBidAwardHeader(processStatus)
   ) {
     outcome = bidAwardOutcome(bidAward, false);
   } else if (technicalStatus) {
@@ -350,7 +370,8 @@ export function applyCardStatusToTender(
   tender: ExtractedTender,
   card: HTMLElement,
 ): ExtractedTender {
-  const statusFields = parseGemCardStatus(card);
+  const scopedCard = cardElementForStatusParse(card, tender.bidNo.toUpperCase());
+  const statusFields = parseGemCardStatus(scopedCard);
   return {
     ...tender,
     status: statusFields.status,
@@ -360,29 +381,105 @@ export function applyCardStatusToTender(
   };
 }
 
+export function expandCardForStatusParsing(card: HTMLElement, bidNo: string): HTMLElement {
+  const cardText = readCardText(card);
+  if (
+    /status\s*:/i.test(cardText) ||
+    normalizeBidAwardHeader(extractProcessStatus(cardText))
+  ) {
+    return card;
+  }
+
+  let current: HTMLElement | null = card.parentElement;
+  for (let depth = 0; depth < 6 && current; depth += 1) {
+    const text = readCardText(current);
+    if (!text.includes(bidNo) || countBidsInText(text) !== 1) break;
+    if (text.length > 8000) break;
+    if (
+      /status\s*:/i.test(text) ||
+      normalizeBidAwardHeader(extractProcessStatus(text))
+    ) {
+      return current;
+    }
+    current = current.parentElement;
+  }
+  return card;
+}
+
+function readStatusScopeText(card: HTMLElement, bidNo: string): string {
+  const expanded = expandCardForStatusParsing(card, bidNo);
+  const expandedText = readCardText(expanded);
+  if (
+    /status\s*:/i.test(expandedText) ||
+    normalizeBidAwardHeader(extractProcessStatus(expandedText))
+  ) {
+    return expandedText;
+  }
+
+  const chunks: string[] = [];
+  let sibling: Element | null = card.previousElementSibling;
+  for (let depth = 0; depth < 4 && sibling; depth += 1) {
+    chunks.unshift(readCardText(sibling as HTMLElement));
+    sibling = sibling.previousElementSibling;
+  }
+  chunks.push(readCardText(card));
+  const merged = chunks.join('\n');
+  if (
+    /status\s*:/i.test(merged) ||
+    normalizeBidAwardHeader(extractProcessStatus(merged))
+  ) {
+    return merged;
+  }
+  return expandedText;
+}
+
+function cardElementForStatusParse(card: HTMLElement, bidNo: string): HTMLElement {
+  const text = readStatusScopeText(card, bidNo);
+  const scoped = document.createElement('div');
+  scoped.textContent = text;
+  return scoped;
+}
+
+function bidNoFromCard(card: HTMLElement): string {
+  return (
+    card.getAttribute('data-flexhrm-bid')?.toUpperCase() ||
+    card.innerText.match(/GEM\/\d{4}\/B\/\d+/i)?.[0]?.toUpperCase() ||
+    ''
+  );
+}
+
+function buildCardIndex(): Map<string, HTMLElement> {
+  const cardByBid = new Map<string, HTMLElement>();
+  for (const card of findTenderCards()) {
+    const bid = bidNoFromCard(card);
+    if (bid) cardByBid.set(bid, card);
+  }
+  return cardByBid;
+}
+
+function resolveCardForBid(bidNo: string, cardByBid: Map<string, HTMLElement>): HTMLElement | null {
+  const normalized = bidNo.toUpperCase();
+  const fromIndex = cardByBid.get(normalized);
+  if (fromIndex) return expandCardForStatusParsing(fromIndex, normalized);
+
+  const pageText = document.body?.innerText ?? '';
+  const chunk = extractChunkForBid(pageText, normalized);
+  if (!chunk) return null;
+
+  const fakeCard = document.createElement('div');
+  fakeCard.innerText = chunk;
+  return fakeCard;
+}
+
 export function extractSelectedTendersForStatusSync(): ExtractedTender[] {
   const tenders = extractSelectedTenders();
   if (tenders.length === 0) return [];
 
-  const cardByBid = new Map<string, HTMLElement>();
-  for (const card of findTenderCards()) {
-    const bid = card.getAttribute('data-flexhrm-bid')?.toUpperCase();
-    if (bid) cardByBid.set(bid, card);
-  }
+  const cardByBid = buildCardIndex();
 
   return tenders.map((tender) => {
-    const card = cardByBid.get(tender.bidNo.toUpperCase());
-    if (!card) {
-      if (isParticipatedFilterActive()) {
-        return {
-          ...tender,
-          status: 'filed',
-          outcome: 'Participated',
-          gemParticipation: 'Participated',
-        };
-      }
-      return tender;
-    }
+    const card = resolveCardForBid(tender.bidNo, cardByBid);
+    if (!card) return tender;
     return applyCardStatusToTender(tender, card);
   });
 }

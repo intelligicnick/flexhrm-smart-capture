@@ -147,4 +147,45 @@ describe('GeM listing status parsing', () => {
     expect(detectSelfBidAward('Status: Bid Award\nBid Award (completed)')).toBe(false);
     expect(detectSelfBidAward('Status: Bid Award\nNot Selected')).toBe(false);
   });
+
+  it('parses Bid / RA Award with EVALUATION + BID AWARD progress as qualified', () => {
+    const cardText = `
+BID NO GEM/2025/B/6746241
+Status: Bid / RA Award
+Bid/RA Status: Active
+Items Manpower Outsourcing Services
+Quantity 27
+Department Ministry of Defence
+Start Date 26-11-2025 2:58 PM
+End Date 17-12-2025 10:00 AM
+EVALUATION
+BID AWARD
+View BID Results
+`;
+    expect(extractProcessStatus(cardText)).toBe('Bid / RA Award');
+    document.body.innerHTML = `<div class="card">${cardText}</div>`;
+    const card = document.querySelector('.card') as HTMLElement;
+    const status = parseGemCardStatus(card);
+    expect(status.status).toBe('qualified');
+    expect(status.outcome).toMatch(/bid award/i);
+    expect(status.status).not.toBe('filed');
+  });
+
+  it('parses multiline Status label for Bid / RA Award', () => {
+    const cardText = `
+BID NO GEM/2025/B/6746241
+Status:
+Bid / RA Award
+Bid/RA Status: Active
+Items Manpower Outsourcing Services
+EVALUATION
+BID AWARD
+`;
+    expect(extractProcessStatus(cardText)).toBe('Bid / RA Award');
+    document.body.innerHTML = `<div class="card">${cardText}</div>`;
+    const card = document.querySelector('.card') as HTMLElement;
+    const status = parseGemCardStatus(card);
+    expect(status.status).toBe('qualified');
+    expect(status.outcome).toMatch(/bid award/i);
+  });
 });

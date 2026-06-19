@@ -10,7 +10,8 @@ export type CaptureType =
   | 'screenshot'
   | 'resume'
   | 'gem-tender'
-  | 'gem-tenders';
+  | 'gem-tenders'
+  | 'gem-contracts';
 
 export type SaveTargetType = 'candidate' | 'employee' | 'lead' | 'contact' | 'tender';
 
@@ -180,6 +181,87 @@ export interface TenderCaptureBatch {
   createdAt: string;
   updatedAt: string;
 }
+
+export type ContractType = 'manpower' | 'travel';
+
+export type ContractStatus =
+  | 'active'
+  | 'upcoming'
+  | 'expired'
+  | 'extended'
+  | 'terminated';
+
+/** GeM fulfilment order — maps to FlexHRM contracts module */
+export interface ExtractedContract {
+  contractNo: string;
+  officerName: string;
+  officeName: string;
+  correspondingOffice: string;
+  fromDate: string;
+  toDate: string;
+  companyName: string;
+  category: string;
+  contractType: ContractType;
+  hasExtension: boolean;
+  extensionEndDate: string;
+  bgApplicable: boolean;
+  bgNumber: string;
+  bgAmount: string;
+  bgIssuingBank: string;
+  bgExpiryDate: string;
+  bgDetails: string;
+  ddoName: string;
+  ddoIssuingDetails: string;
+  tenderBidNo: string;
+  contractValue: string;
+  status: ContractStatus;
+  notes: string;
+  entryDate: string;
+  gemContractId: string;
+  gemContractPdfUrl: string;
+  gemOrderStatus: string;
+  sourceUrl: string;
+}
+
+export interface ContractCaptureBatch {
+  id: string;
+  contracts: ExtractedContract[];
+  metadata: CaptureMetadata;
+  status: 'draft' | 'review' | 'saved' | 'failed';
+  createdAt: string;
+  updatedAt: string;
+}
+
+export const EMPTY_CONTRACT: ExtractedContract = {
+  contractNo: '',
+  officerName: '',
+  officeName: '',
+  correspondingOffice: '',
+  fromDate: '',
+  toDate: '',
+  companyName: '',
+  category: '',
+  contractType: 'manpower',
+  hasExtension: false,
+  extensionEndDate: '',
+  bgApplicable: false,
+  bgNumber: '',
+  bgAmount: '',
+  bgIssuingBank: '',
+  bgExpiryDate: '',
+  bgDetails: '',
+  ddoName: '',
+  ddoIssuingDetails: '',
+  tenderBidNo: '',
+  contractValue: '',
+  status: 'active',
+  notes: '',
+  entryDate: '',
+  gemContractId: '',
+  gemContractPdfUrl: '',
+  gemOrderStatus: '',
+  sourceUrl: '',
+};
 
 export const EMPTY_TENDER: ExtractedTender = {
   bidNo: '',

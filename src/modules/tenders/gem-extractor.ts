@@ -162,7 +162,7 @@ function parseDepartmentFromCard(card: HTMLElement): string[] {
   return lines;
 }
 
-function countBidsInText(text: string): number {
+export function countBidsInText(text: string): number {
   return new Set((text.match(/GEM\/\d{4}\/B\/\d+/gi) ?? []).map((b) => b.toUpperCase())).size;
 }
 
@@ -401,7 +401,7 @@ export function extractGemTendersFromPage(root: ParentNode = document): Extracte
   return tenders;
 }
 
-function extractChunkForBid(pageText: string, bidNo: string): string {
+export function extractChunkForBid(pageText: string, bidNo: string): string {
   const idx = pageText.indexOf(bidNo);
   if (idx === -1) return '';
   const start = Math.max(0, idx - 100);

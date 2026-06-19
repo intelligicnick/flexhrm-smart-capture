@@ -3,8 +3,10 @@ import { useCapturePanel } from './hooks/useCapturePanel';
 import { DraftList } from './components/DraftList';
 import { ReviewPanel } from './components/ReviewPanel';
 import { TenderReviewPanel } from './TenderReviewPanel';
+import { ContractReviewPanel } from './ContractReviewPanel';
 import { loadConfig } from '../shared/services/secure-storage';
 import { GEM_SELLER_BIDS_URL } from '../shared/utils/gem-url';
+import { GEM_ORDERS_URL } from '../modules/contracts/gem-orders-url';
 import { StatusAlert } from '../shared/components/StatusAlert';
 import '../shared/styles/global.css';
 
@@ -21,6 +23,8 @@ export function App() {
     activeDraft,
     tenderBatch,
     setTenderBatch,
+    contractBatch,
+    setContractBatch,
     duplicates,
     saving,
     message,
@@ -48,6 +52,7 @@ export function App() {
 
   const tabs = [
     { id: 'tenders' as const, label: 'GeM Tenders', badge: tenderBatch?.tenders.length },
+    { id: 'contracts' as const, label: 'GeM Contracts', badge: contractBatch?.contracts.length },
     { id: 'review' as const, label: 'Review' },
     { id: 'drafts' as const, label: 'Drafts', badge: drafts.length },
     { id: 'history' as const, label: 'History', badge: history.length },
@@ -122,6 +127,24 @@ export function App() {
               GeM Seller Bids
             </a>{' '}
             and use <strong>Pull &amp; Read PDFs</strong>.
+          </div>
+        )}
+
+        {tab === 'contracts' && contractBatch && contractBatch.status !== 'saved' && (
+          <ContractReviewPanel
+            batch={contractBatch}
+            onBatchChange={setContractBatch}
+            onSaved={refresh}
+          />
+        )}
+
+        {tab === 'contracts' && (!contractBatch || contractBatch.status === 'saved') && (
+          <div className="rounded-lg border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">
+            No GeM orders captured yet. Open{' '}
+            <a href={GEM_ORDERS_URL} target="_blank" rel="noreferrer" className="text-blue-600 underline">
+              GeM Orders
+            </a>{' '}
+            and use <strong>Pull All Orders</strong>.
           </div>
         )}
 

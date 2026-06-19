@@ -1,10 +1,14 @@
-import type { CaptureDraft, CaptureMetadata, TenderCaptureBatch } from '../shared/types';
+import type { CaptureDraft, CaptureMetadata, ContractCaptureBatch, TenderCaptureBatch } from '../shared/types';
 import { saveDraft } from '../shared/services/storage';
 import {
   getTenderBatches,
   saveTenderBatch,
   getLatestTenderBatch,
 } from '../shared/services/tender-storage';
+import {
+  getContractBatches,
+  saveContractBatch,
+} from '../shared/services/contract-storage';
 import { loadConfig } from '../shared/services/secure-storage';
 import {
   extractData,
@@ -14,6 +18,8 @@ import {
   importTenders,
   checkTenderDuplicates,
   syncTenderStatuses,
+  importContracts,
+  checkContractDuplicates,
 } from '../shared/services/flexhrm-api';
 import { buildDraftFromContent, enrichDraftWithExtraction } from '../modules/resume/parser';
 import { validateCapture } from '../modules/capture/validation';
@@ -84,6 +90,9 @@ chrome.runtime.onInstalled.addListener(() => {
         conditions: [
           new chrome.declarativeContent.PageStateMatcher({
             pageUrl: { hostEquals: 'bidplus.gem.gov.in', pathPrefix: '/seller-bids' },
+          }),
+          new chrome.declarativeContent.PageStateMatcher({
+            pageUrl: { hostEquals: 'fulfilment.gem.gov.in' },
           }),
         ],
         actions: [new chrome.declarativeContent.ShowAction()],
@@ -275,6 +284,60 @@ async function handleMessage(
       batch.status = 'saved';
       batch.updatedAt = new Date().toISOString();
       await saveTenderBatch(batch);
+      return { success: true, ...result };
+    }
+
+    case 'CAPTURE_GEM_CONTRACTS': {
+      const payload = message.payload as { batchId?: string };
+      let batch: ContractCaptureBatch | null = null;
+      if (payload.batchId) {
+        batch = (await getContractBatches()).find((item) => item.id === payload.batchId) ?? null;
+        if (!batch) {
+          throw new FlexHRMApiError({
+            title: 'Capture failed',
+            message: 'Contract batch could not be loaded after save.',
+            hint: 'Reload the extension at chrome://extensions, refresh the GeM Orders page, and try again.',
+          });
+        }
+      } else {
+        throw new FlexHRMApiError({
+          title: 'Capture failed',
+          message: 'No GeM order data was received.',
+          hint: 'Open GeM Orders and click Pull All Orders again.',
+        });
+      }
+
+      if (sender?.tab?.id) {
+        await chrome.sidePanel.open({ tabId: sender.tab.id }).catch(() => undefined);
+      }
+      await broadcastExtensionEvent({ type: 'CONTRACT_BATCH_CREATED', payload: batch });
+      return { success: true, count: batch.contracts.length, batch };
+    }
+
+    case 'CHECK_CONTRACT_DUPLICATES': {
+      const batch = message.payload as ContractCaptureBatch;
+      const config = await loadConfig();
+      if (!config) return { existing: [] };
+      const keys = batch.contracts.map(
+        (c) => c.gemContractPdfUrl || c.contractNo,
+      );
+      return checkContractDuplicates(config, keys);
+    }
+
+    case 'SAVE_CONTRACT_BATCH': {
+      const batch = message.payload as ContractCaptureBatch;
+      const config = await loadConfig();
+      if (!config?.flexhrmUrl || !config.accessToken) {
+        throw new FlexHRMApiError({
+          title: 'Not connected',
+          message: 'FlexHRM is not connected yet.',
+          hint: 'Open extension Settings, enter your API URL, and connect with a code from FlexHRM Profile → Browser Extension.',
+        });
+      }
+      const result = await importContracts(config, batch.contracts);
+      batch.status = 'saved';
+      batch.updatedAt = new Date().toISOString();
+      await saveContractBatch(batch);
       return { success: true, ...result };
     }
 

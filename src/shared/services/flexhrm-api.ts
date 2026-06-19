@@ -2,12 +2,14 @@ import type {
   CaptureDraft,
   DuplicateMatch,
   ExtractedCandidateData,
+  ExtractedContract,
   ExtractedTender,
   FlexHRMConfig,
   QueuedRecord,
   SaveTargetType,
 } from '../types';
 import { tenderToFlexHRMPayload } from '../../modules/tenders/gem-extractor';
+import { contractToFlexHRMPayload } from '../../modules/contracts/gem-orders-extractor';
 import { resolveFlexHrmApiUrl } from '../utils/resolve-api-url';
 import {
   formatHttpApiError,
@@ -350,6 +352,35 @@ export async function saveTender(
   return request(config, '/tenders', {
     method: 'POST',
     body: JSON.stringify(tenderToFlexHRMPayload(tender)),
+  });
+}
+
+export async function listContracts(
+  config: FlexHRMConfig,
+): Promise<Array<{ id: string; contractNo: string; gemContractPdfUrl?: string }>> {
+  return request(config, '/contracts');
+}
+
+export async function checkContractDuplicates(
+  config: FlexHRMConfig,
+  contractKeys: string[],
+): Promise<{ existing: string[] }> {
+  const all = await listContracts(config);
+  const existingSet = new Set(
+    all.flatMap((c) => [c.contractNo, c.gemContractPdfUrl].filter(Boolean).map((v) => v!.toUpperCase())),
+  );
+  const existing = contractKeys.filter((key) => existingSet.has(key.toUpperCase()));
+  return { existing };
+}
+
+export async function importContracts(
+  config: FlexHRMConfig,
+  contracts: ExtractedContract[],
+): Promise<{ created: number; updated: number; skipped: number; errors: string[] }> {
+  const items = contracts.map(contractToFlexHRMPayload);
+  return request(config, '/contracts/import', {
+    method: 'POST',
+    body: JSON.stringify({ items }),
   });
 }
 
