@@ -1,5 +1,13 @@
-import type { CaptureMetadata } from '../shared/types';
-import { sendExtensionMessage, requestOpenSidePanel, postDebugLog } from '../shared/utils/messaging';
+import type { CaptureMetadata, TenderCaptureBatch } from '../shared/types';
+import {
+  EXTENSION_RELOAD_HINT,
+  isExtensionContextValid,
+  pingExtensionBackground,
+  postDebugLog,
+  requestOpenSidePanel,
+  sendExtensionMessage,
+} from '../shared/utils/messaging';
+import { saveTenderBatch } from '../shared/services/tender-storage';
 import {
   extractGemTendersFromPage,
   isGemListingPage,
@@ -29,6 +37,10 @@ function getMetadata(): CaptureMetadata {
   };
 }
 
+function showExtensionReloadError(): void {
+  showGemError('FlexHRM extension was updated or reloaded.', EXTENSION_RELOAD_HINT);
+}
+
 function captureGemTenders(
   tenders = extractGemTendersFromPage(),
   onComplete?: (
@@ -38,6 +50,12 @@ function captureGemTenders(
 ) {
   if (!tenders.length) {
     alert('No GeM tenders selected. Tick the checkboxes on tenders you want, then pull to sidebar.');
+    onComplete?.(false);
+    return;
+  }
+
+  if (!isExtensionContextValid()) {
+    showExtensionReloadError();
     onComplete?.(false);
     return;
   }
@@ -78,17 +96,44 @@ function captureGemTenders(
       data: { pdfFetched, pdfFailed, pdfFailureReasons },
     });
 
+    const now = new Date().toISOString();
+    const batch: TenderCaptureBatch = {
+      id: crypto.randomUUID(),
+      tenders: enrichedTenders,
+      metadata: getMetadata(),
+      status: 'review',
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    try {
+      await saveTenderBatch(batch);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '';
+      if (message.includes('Extension context invalidated')) {
+        showExtensionReloadError();
+      } else {
+        showGemError(
+          'Could not save tenders locally in the extension.',
+          message || 'Try reloading the extension.',
+        );
+      }
+      onComplete?.(false);
+      return;
+    }
+
+    pingExtensionBackground();
     const response = await sendExtensionMessage<{
       success?: boolean;
       error?: string;
+      hint?: string;
       pdfFetched?: number;
       pdfFailed?: number;
       pdfFailureReasons?: string[];
     }>({
       type: 'CAPTURE_GEM_TENDERS',
       payload: {
-        tenders: enrichedTenders,
-        metadata: getMetadata(),
+        batchId: batch.id,
         fetchPdfs: false,
         pdfFetched,
         pdfFailed,
@@ -96,49 +141,56 @@ function captureGemTenders(
       },
     });
 
-    if (!response) {
-      alert(
-        'FlexHRM extension is not responding. Open chrome://extensions and click Reload on FlexHRM Smart Capture.',
+    if (!response?.success) {
+      showGemError(
+        response?.error,
+        response?.hint || 'Open chrome://extensions and reload FlexHRM Smart Capture.',
       );
       onComplete?.(false);
       return;
     }
-    if (response.success) {
-      const fetched = Number(response.pdfFetched ?? pdfFetched) || 0;
-      const failed = Number(response.pdfFailed ?? pdfFailed) || 0;
-      const reasons =
-        (Array.isArray(response.pdfFailureReasons) && response.pdfFailureReasons.length > 0
-          ? response.pdfFailureReasons
-          : pdfFailureReasons) ?? [];
-      if (fetched > 0 || failed > 0) {
-        const firstReason = reasons.length > 0 ? ` Reason: ${reasons[0]}.` : '';
-        const msg =
-          failed > 0
-            ? `PDF details loaded for ${fetched} tender(s). ${failed} could not be read (listing data still saved).${firstReason}`
-            : `PDF details loaded for ${fetched} tender(s). Review in sidebar.`;
-        showGemToast(msg);
-      }
-      onComplete?.(true, response);
-      return;
+
+    const fetched = Number(response.pdfFetched ?? pdfFetched) || 0;
+    const failed = Number(response.pdfFailed ?? pdfFailed) || 0;
+    const reasons =
+      (Array.isArray(response.pdfFailureReasons) && response.pdfFailureReasons.length > 0
+        ? response.pdfFailureReasons
+        : pdfFailureReasons) ?? [];
+    if (fetched > 0 || failed > 0) {
+      const firstReason = reasons.length > 0 ? ` Reason: ${reasons[0]}.` : '';
+      const msg =
+        failed > 0
+          ? `PDF details loaded for ${fetched} tender(s). ${failed} could not be read (listing data still saved).${firstReason}`
+          : `PDF details loaded for ${fetched} tender(s). Review in sidebar.`;
+      showGemToast(msg);
+    } else {
+      showGemToast(`${batch.tenders.length} tender(s) sent to FlexHRM sidebar.`);
     }
-    alert(response.error || 'Import failed. Reload the extension and try again.');
-    onComplete?.(false);
+    onComplete?.(true, response);
   })();
 }
 
-function showGemToast(message: string): void {
+function showGemToast(message: string, tone: 'info' | 'error' = 'info'): void {
   const id = 'flexhrm-gem-toast';
   document.getElementById(id)?.remove();
   const toast = document.createElement('div');
   toast.id = id;
+  const bg = tone === 'error' ? '#991b1b' : '#1e3a8a';
   toast.style.cssText = `
     position: fixed; top: 16px; right: 16px; z-index: 2147483646;
-    background: #1e3a8a; color: #fff; padding: 12px 16px; border-radius: 10px;
-    font: 13px system-ui, sans-serif; max-width: 360px; box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+    background: ${bg}; color: #fff; padding: 12px 16px; border-radius: 10px;
+    font: 13px/1.45 system-ui, sans-serif; max-width: 380px; box-shadow: 0 8px 24px rgba(0,0,0,0.2);
   `;
   toast.textContent = message;
   document.body.appendChild(toast);
-  window.setTimeout(() => toast.remove(), 6000);
+  window.setTimeout(() => toast.remove(), tone === 'error' ? 10000 : 6000);
+}
+
+function showGemError(error?: string, hint?: string): void {
+  const message = [error || 'FlexHRM extension could not complete this action.', hint]
+    .filter(Boolean)
+    .join(' ');
+  showGemToast(message, 'error');
 }
 
 function pullSelectedTenders() {
@@ -159,11 +211,18 @@ function syncSelectedTenderStatuses() {
     return;
   }
 
+  if (!isExtensionContextValid()) {
+    showExtensionReloadError();
+    return;
+  }
+
   setGemSyncLoading(true);
   void (async () => {
+    pingExtensionBackground();
     const response = await sendExtensionMessage<{
       success?: boolean;
       error?: string;
+      hint?: string;
       updated?: number;
       notFound?: number;
       errors?: string[];
@@ -174,14 +233,11 @@ function syncSelectedTenderStatuses() {
 
     setGemSyncLoading(false);
 
-    if (!response) {
-      alert(
-        'FlexHRM extension is not responding. Open chrome://extensions and click Reload on FlexHRM Smart Capture.',
+    if (!response?.success) {
+      showGemError(
+        response?.error,
+        response?.hint || 'Connect the extension in Settings, then try again.',
       );
-      return;
-    }
-    if (!response.success) {
-      alert(response.error || 'Status sync failed. Check extension settings and try again.');
       return;
     }
 
@@ -281,6 +337,7 @@ function init() {
   if (window.self !== window.top) return;
   if (!isGemSellerBidsPage()) return;
 
+  pingExtensionBackground();
   setupExtensionMessageAck();
   createFab();
   setupGemListingUi();

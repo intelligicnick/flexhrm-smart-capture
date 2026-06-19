@@ -18,4 +18,28 @@ describe('resolveFlexHrmApiUrl', () => {
     const local = 'http://localhost:3001';
     await expect(resolveFlexHrmApiUrl(local)).resolves.toBe(local);
   });
+
+  it('keeps localhost UI origin even when extension-config points to production', async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/extension-config.json')) {
+        return new Response(
+          JSON.stringify({
+            apiBase: 'https://midnightblue-partridge-476451.hostingersite.com',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      return originalFetch(input);
+    }) as typeof fetch;
+
+    try {
+      await expect(resolveFlexHrmApiUrl('http://localhost:3000')).resolves.toBe(
+        'http://localhost:3000',
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });

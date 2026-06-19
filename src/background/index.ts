@@ -1,6 +1,10 @@
 import type { CaptureDraft, CaptureMetadata, TenderCaptureBatch } from '../shared/types';
 import { saveDraft } from '../shared/services/storage';
-import { saveTenderBatch, getLatestTenderBatch } from '../shared/services/tender-storage';
+import {
+  getTenderBatches,
+  saveTenderBatch,
+  getLatestTenderBatch,
+} from '../shared/services/tender-storage';
 import { loadConfig } from '../shared/services/secure-storage';
 import {
   extractData,
@@ -24,6 +28,8 @@ import type { ExtractedTender } from '../shared/types';
 import { EMPTY_TENDER } from '../shared/types';
 import type { GemPdfDetails } from '../modules/tenders/gem-pdf-parser';
 import { broadcastExtensionEvent, isIgnorableRuntimeError } from '../shared/utils/messaging';
+import { formatThrownError, formatUserFacingErrorText } from '../shared/utils/api-error-messages';
+import { FlexHRMApiError } from '../shared/services/flexhrm-api';
 
 const CONTEXT_MENU_ID = 'flexhrm-save-selection';
 const SELLER_BIDS_MATCH = 'https://bidplus.gem.gov.in/seller-bids*';
@@ -47,6 +53,10 @@ function tenderFromPdfDetails(
     additionalRequirements: details.additionalRequirements,
     preBidAt: details.preBidAt,
     preBidVenue: details.preBidAddress,
+    startDate: details.startDate,
+    gemStartDate: details.startDate,
+    endDate: details.endDate,
+    gemEndDate: details.endDate,
     noPreBid: details.noPreBid,
     notes: details.description,
     description: details.description,
@@ -132,7 +142,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   void handleMessage(message, sender)
     .then(reply)
     .catch((err) => {
-      reply({ success: false, error: err instanceof Error ? err.message : 'Unknown error' });
+      const facing =
+        err instanceof FlexHRMApiError ? err.userFacing : formatThrownError(err, 'save');
+      reply({ success: false, error: formatUserFacingErrorText(facing), userFacing: facing });
     });
   return true;
 });
@@ -157,6 +169,9 @@ async function handleMessage(
   sender?: chrome.runtime.MessageSender,
 ) {
   switch (message.type) {
+    case 'PING':
+      return { success: true, pong: true };
+
     case 'DEBUG_LOG': {
       const payload = (message.payload ?? {}) as Record<string, unknown>;
       void fetch('http://127.0.0.1:3001/api/health/debug-ingest', {
@@ -169,73 +184,65 @@ async function handleMessage(
 
     case 'CAPTURE_GEM_TENDERS': {
       const payload = message.payload as {
-        tenders: TenderCaptureBatch['tenders'];
-        metadata: CaptureMetadata;
+        batchId?: string;
+        tenders?: TenderCaptureBatch['tenders'];
+        metadata?: CaptureMetadata;
         fetchPdfs?: boolean;
         pdfFetched?: number;
         pdfFailed?: number;
         pdfFailureReasons?: string[];
       };
-      // #region agent log
-      fetch(
-        `http://127.0.0.1:3001/api/health?source=ext-capture-gem-tenders&count=${encodeURIComponent(
-          String(payload.tenders?.length ?? 0),
-        )}`,
-      ).catch(() => undefined);
-      fetch('http://127.0.0.1:3001/api/health/debug-ingest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'3941a9',runId:'post-fix',hypothesisId:'H5',location:'background/index.ts:CAPTURE_GEM_TENDERS',message:'capture gem tenders handler entered',data:{tenderCount:payload.tenders?.length ?? 0,hasSenderTab:!!sender?.tab?.id,preEnriched:payload.fetchPdfs === false},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
+
+      const pdfFetched = payload.pdfFetched ?? 0;
+      const pdfFailed = payload.pdfFailed ?? 0;
+      const pdfFailureReasons = payload.pdfFailureReasons ?? [];
+
+      let batch: TenderCaptureBatch | null = null;
+      if (payload.batchId) {
+        batch = (await getTenderBatches()).find((item) => item.id === payload.batchId) ?? null;
+        if (!batch) {
+          throw new FlexHRMApiError({
+            title: 'Capture failed',
+            message: 'Tender batch could not be loaded after save.',
+            hint: 'Reload the extension at chrome://extensions, refresh this page, and try again.',
+          });
+        }
+      } else if (payload.tenders?.length && payload.metadata) {
+        const now = new Date().toISOString();
+        let tenders = payload.tenders;
+        let fetched = pdfFetched;
+        let failed = pdfFailed;
+        let failureReasons = pdfFailureReasons;
+
+        if (payload.fetchPdfs !== false) {
+          const enriched = await enrichTendersFromPdfs(tenders, sender?.tab?.id);
+          tenders = enriched.tenders;
+          fetched = enriched.pdfFetched;
+          failed = enriched.pdfFailed;
+          failureReasons = enriched.pdfFailureReasons;
+        }
+
+        batch = {
+          id: crypto.randomUUID(),
+          tenders,
+          metadata: payload.metadata,
+          status: 'review',
+          createdAt: now,
+          updatedAt: now,
+        };
+        await saveTenderBatch(batch);
+      } else {
+        throw new FlexHRMApiError({
+          title: 'Capture failed',
+          message: 'No tender data was received from the GeM page.',
+          hint: 'Select tenders with the checkboxes, then click Pull & Read PDFs again.',
+        });
+      }
+
       if (sender?.tab?.id) {
-        await chrome.sidePanel.open({ tabId: sender.tab.id });
+        await chrome.sidePanel.open({ tabId: sender.tab.id }).catch(() => undefined);
       }
-      const now = new Date().toISOString();
-      let tenders = payload.tenders;
-      let pdfFetched = payload.pdfFetched ?? 0;
-      let pdfFailed = payload.pdfFailed ?? 0;
-      let pdfFailureReasons = payload.pdfFailureReasons ?? [];
-
-      if (payload.fetchPdfs !== false) {
-        const enriched = await enrichTendersFromPdfs(tenders, sender?.tab?.id);
-        tenders = enriched.tenders;
-        pdfFetched = enriched.pdfFetched;
-        pdfFailed = enriched.pdfFailed;
-        pdfFailureReasons = enriched.pdfFailureReasons;
-      }
-
-      const batch: TenderCaptureBatch = {
-        id: crypto.randomUUID(),
-        tenders,
-        metadata: payload.metadata,
-        status: 'review',
-        createdAt: now,
-        updatedAt: now,
-      };
-      await saveTenderBatch(batch);
       await broadcastExtensionEvent({ type: 'TENDER_BATCH_CREATED', payload: batch });
-      void fetch('http://127.0.0.1:3001/api/health/debug-ingest', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId: '3941a9',
-          runId: 'post-fix',
-          hypothesisId: 'H6',
-          location: 'background/index.ts:CAPTURE_GEM_TENDERS',
-          message: 'batch saved',
-          data: {
-            pdfFetched,
-            pdfFailed,
-            pdfFailureReasons,
-            sample: tenders[0]
-              ? {
-                  bidNo: tenders[0].bidNo,
-                  preBidAt: tenders[0].preBidAt,
-                  preBidVenue: tenders[0].preBidVenue,
-                  rateLen: tenders[0].rate?.length ?? 0,
-                }
-              : null,
-          },
-          timestamp: Date.now(),
-        }),
-      }).catch(() => undefined);
       return {
         success: true,
         count: batch.tenders.length,
@@ -258,7 +265,11 @@ async function handleMessage(
       const batch = message.payload as TenderCaptureBatch;
       const config = await loadConfig();
       if (!config?.flexhrmUrl || !config.accessToken) {
-        throw new Error('FlexHRM is not configured. Open Settings to add your API URL and token.');
+        throw new FlexHRMApiError({
+          title: 'Not connected',
+          message: 'FlexHRM is not connected yet.',
+          hint: 'Open extension Settings, enter your API URL, and connect with a code from FlexHRM Profile → Browser Extension.',
+        });
       }
       const result = await importTenders(config, batch.tenders);
       batch.status = 'saved';
@@ -271,7 +282,11 @@ async function handleMessage(
       const payload = message.payload as { tenders: ExtractedTender[] };
       const config = await loadConfig();
       if (!config?.flexhrmUrl || !config.accessToken) {
-        throw new Error('FlexHRM is not configured. Open Settings to add your API URL and token.');
+        throw new FlexHRMApiError({
+          title: 'Not connected',
+          message: 'FlexHRM is not connected yet.',
+          hint: 'Open extension Settings, enter your API URL, and connect with a code from FlexHRM Profile → Browser Extension.',
+        });
       }
       const result = await syncTenderStatuses(config, payload.tenders || []);
       return { success: true, ...result };
@@ -401,7 +416,11 @@ async function handleMessage(
       const draft = message.payload as CaptureDraft;
       const config = await loadConfig();
       if (!config?.flexhrmUrl || !config.accessToken) {
-        throw new Error('FlexHRM is not configured. Open Settings to add your API URL and token.');
+        throw new FlexHRMApiError({
+          title: 'Not connected',
+          message: 'FlexHRM is not connected yet.',
+          hint: 'Open extension Settings, enter your API URL, and connect with a code from FlexHRM Profile → Browser Extension.',
+        });
       }
       const result = await saveWithOfflineFallback(config, draft);
       if (!result.queued) {

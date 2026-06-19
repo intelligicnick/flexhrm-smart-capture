@@ -1,6 +1,8 @@
 export interface GemPdfDetails {
   preBidAt: string;
   preBidAddress: string;
+  startDate: string;
+  endDate: string;
   rate: string;
   additionalRequirements: string;
   description: string;
@@ -50,6 +52,38 @@ export function isJunkTenderFieldValue(value: string): boolean {
 
 const DATE_TIME_RE =
   /(\d{1,2}[-/]\d{1,2}[-/]\d{4}(?:\s+\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:AM|PM|am|pm)?)?)?)/;
+
+/** Normalize GeM PDF date/time to DD-MM-YYYY HH:mm:ss (24-hour). Date-only input returns DD-MM-YYYY. */
+export function normalizeGemPdfDateTime(raw: string): string {
+  const trimmed = stripPdfNoise(raw).trim();
+  if (!trimmed) return '';
+
+  const match = trimmed.match(
+    /(\d{1,2})[-/](\d{1,2})[-/](\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM|am|pm)?)?/,
+  );
+  if (!match) return trimmed;
+
+  const day = String(Number(match[1])).padStart(2, '0');
+  const month = String(Number(match[2])).padStart(2, '0');
+  const year = match[3];
+
+  if (!match[4]) return `${day}-${month}-${year}`;
+
+  let hour = Number(match[4]);
+  const minute = String(Number(match[5])).padStart(2, '0');
+  const second = match[6] ? String(Number(match[6])).padStart(2, '0') : '00';
+  const ampm = match[7]?.toUpperCase();
+
+  if (ampm === 'PM' && hour < 12) hour += 12;
+  if (ampm === 'AM' && hour === 12) hour = 0;
+
+  return `${day}-${month}-${year} ${String(hour).padStart(2, '0')}:${minute}:${second}`;
+}
+
+/** Date-only form of normalizeGemPdfDateTime — DD-MM-YYYY. */
+export function normalizeGemPdfDate(raw: string): string {
+  return normalizeGemPdfDateTime(raw).split(/\s+/)[0] ?? '';
+}
 
 const OPTIONAL_LABEL_SEP = '(?:[:\\-–])?';
 
@@ -205,6 +239,33 @@ function extractBlockAfterLabel(text: string, labels: string[]): string {
     const match = text.match(pattern);
     if (match?.[1]?.trim()) return stripPdfNoise(match[1]);
   }
+  return '';
+}
+
+function extractBidDateTime(raw: string, flat: string, labels: string[]): string {
+  for (const source of [raw, flat]) {
+    const fromLabel = extractAfterLabel(source, labels);
+    if (fromLabel && DATE_TIME_RE.test(fromLabel)) {
+      return fromLabel.match(DATE_TIME_RE)?.[0] ?? fromLabel;
+    }
+    const fromMultiline = extractAfterLabelMultiline(source, labels);
+    if (fromMultiline && DATE_TIME_RE.test(fromMultiline)) {
+      return fromMultiline.match(DATE_TIME_RE)?.[0] ?? fromMultiline;
+    }
+  }
+
+  for (const label of labels) {
+    const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\//g, '\\/?');
+    const pattern = new RegExp(
+      `${escaped}\\s*[:\\-–]?\\s*(\\d{1,2}[-/]\\d{1,2}[-/]\\d{4}(?:\\s+\\d{1,2}:\\d{2}(?::\\d{2})?(?:\\s*(?:AM|PM|am|pm)?)?)?)`,
+      'i',
+    );
+    for (const source of [flat, raw]) {
+      const match = source.match(pattern);
+      if (match?.[1]?.trim()) return stripPdfNoise(match[1]);
+    }
+  }
+
   return '';
 }
 
@@ -700,7 +761,7 @@ function detectNoPreBid(
 }
 
 export function formatPreBidDisplay(preBidAt: string, preBidAddress: string): string {
-  const at = stripPdfNoise(preBidAt);
+  const at = normalizeGemPdfDateTime(preBidAt);
   const venue = stripPdfNoise(preBidAddress);
   if (at && venue) return `${at} @ ${venue}`;
   return at || venue;
@@ -745,9 +806,22 @@ export function parseGemBidPdfText(text: string): GemPdfDetails {
   const description = extractBuyerAdditionalNotes(asciiFlat);
   const noPreBid = detectNoPreBid(raw, flat, preBidAt, preBidAddress);
 
+  const startDateRaw = extractBidDateTime(raw, flat, [
+    'Bid Start Date/Time',
+    'Bid Start Date',
+    'Start Date',
+  ]);
+  const endDateRaw = extractBidDateTime(raw, flat, [
+    'Bid End Date/Time',
+    'Bid End Date',
+    'End Date',
+  ]);
+
   return {
-    preBidAt: preBidAt.trim(),
+    preBidAt: normalizeGemPdfDateTime(preBidAt.trim()),
     preBidAddress: preBidAddress.trim(),
+    startDate: normalizeGemPdfDate(startDateRaw),
+    endDate: normalizeGemPdfDateTime(endDateRaw),
     rate,
     additionalRequirements,
     description,

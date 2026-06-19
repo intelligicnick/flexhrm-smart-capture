@@ -14,6 +14,18 @@ function hostFromUrl(url: string): string {
   }
 }
 
+function isLocalDevHost(host: string): boolean {
+  return (
+    host === 'localhost' ||
+    host === '127.0.0.1' ||
+    host === '::1' ||
+    host === '[::1]' ||
+    /^10\./.test(host) ||
+    /^192\.168\./.test(host) ||
+    /^172\.(1[6-9]|2\d|3[0-1])\./.test(host)
+  );
+}
+
 async function fetchApiBaseFromFrontend(frontendOrigin: string): Promise<string> {
   try {
     const response = await fetch(`${frontendOrigin}/extension-config.json`, { cache: 'no-store' });
@@ -33,6 +45,9 @@ export async function resolveFlexHrmApiUrl(inputUrl: string): Promise<string> {
   const host = hostFromUrl(base);
   const apiHost = hostFromUrl(PRODUCTION_API_BASE);
   const frontendHost = hostFromUrl(PRODUCTION_FRONTEND_ORIGIN);
+
+  // Local dev serves production extension-config.json from /public — never redirect away.
+  if (isLocalDevHost(host)) return base;
 
   if (host === apiHost) return base;
 

@@ -42,7 +42,7 @@ export function extractProcessStatus(cardText: string): string {
   }
 
   const inline = cardText.match(
-    /Status\s+(Technical Evaluation|Financial Evaluation|Bid Award|Evaluation)/i,
+    /Status\s+(Technical Evaluation|Financial Evaluation|Bid\s*\/?\s*RA\s*Award|Bid Award|Evaluation)/i,
   );
   return inline?.[1]?.trim() ?? '';
 }
@@ -129,23 +129,131 @@ function inferStageStateFromHeader(
     return 'pending';
   }
   if (stage.includes('financial')) {
-    if (header.includes('financial')) return 'in progress';
+    if (header.includes('financial evaluation')) return 'in progress';
     if (header.includes('bid award')) return 'completed';
     if (header.includes('technical evaluation')) return 'pending';
     return 'pending';
   }
   if (stage.includes('bid award')) {
-    if (header.includes('bid award')) return 'completed';
+    if (header.includes('bid award') || header.includes('bid / ra award')) {
+      return 'in progress';
+    }
+    return 'pending';
+  }
+  if (stage.includes('evaluation')) {
+    if (header.includes('technical evaluation') || header.includes('evaluation')) {
+      return 'in progress';
+    }
+    if (header.includes('financial') || header.includes('bid award') || header.includes('bid / ra award')) {
+      return 'completed';
+    }
     return 'pending';
   }
   return 'pending';
 }
 
+type StageState = 'in progress' | 'completed' | 'pending';
+
+function parseStageLine(line: string): { label: string; state: StageState } | null {
+  const match = line.match(/^(.+?)\s+\((in progress|completed|pending)\)$/i);
+  if (!match) return null;
+  return { label: match[1].trim(), state: match[2].toLowerCase() as StageState };
+}
+
+function stageState(
+  stageLines: string[],
+  keyword: string,
+): StageState | '' {
+  const needle = keyword.toLowerCase();
+  for (const line of stageLines) {
+    const parsed = parseStageLine(line);
+    if (parsed && parsed.label.toLowerCase().includes(needle)) return parsed.state;
+  }
+  return '';
+}
+
+/** True only when GeM text indicates this seller won — not merely that bid award stage ran. */
+export function detectSelfBidAward(cardText: string): boolean {
+  const text = cardText.toLowerCase();
+  if (/not\s+(?:selected|awarded|l1)/i.test(text)) return false;
+  if (/unsuccessful|not\s+won|lost\s+bid/i.test(text)) return false;
+  if (/\bl1\b/.test(text)) return true;
+  if (/single\s+selected/i.test(text)) return true;
+  if (/you\s+(?:have\s+been\s+)?(?:awarded|won)/i.test(text)) return true;
+  if (/your\s+bid\s+is\s+(?:selected|awarded)/i.test(text)) return true;
+  if (/contract\s+awarded\s+to\s+you/i.test(text)) return true;
+  if (/won\s+the\s+bid/i.test(text)) return true;
+  return false;
+}
+
+function bidAwardOutcome(
+  bidAward: StageState | '',
+  selfAwarded: boolean,
+): string {
+  if (selfAwarded) return 'Won the Bid';
+  if (bidAward === 'completed') return 'Bid Awarded';
+  if (bidAward === 'in progress') return 'Bid Award in Progress';
+  return 'Qualified';
+}
+
+/** Map GeM progress colours / header to FlexHRM tender status. */
+export function deriveStatusFromGemProgress(
+  processStatus: string,
+  technicalStatus: string,
+  stageLines: string[],
+  participated: boolean,
+  cardText = '',
+): TenderStatus {
+  const techResult = technicalStatus.toLowerCase().trim();
+  if (techResult.includes('disqualified')) return 'disqualified';
+
+  const tech = stageState(stageLines, 'technical');
+  const financial = stageState(stageLines, 'financial');
+  const bidAward = stageState(stageLines, 'bid award');
+  const hasFinancialStage = stageLines.some((line) =>
+    /financial evaluation/i.test(line),
+  );
+  const header = processStatus.toLowerCase();
+  const atBidAwardStage =
+    bidAward === 'completed' ||
+    bidAward === 'in progress' ||
+    header.includes('bid award') ||
+    header.includes('bid / ra award');
+
+  if (atBidAwardStage) {
+    return detectSelfBidAward(cardText) ? 'won_bid' : 'qualified';
+  }
+  if (financial === 'in progress' || header.includes('financial evaluation')) {
+    return 'financial';
+  }
+  if (
+    techResult.includes('qualified') ||
+    tech === 'completed' ||
+    (financial === 'completed' && hasFinancialStage)
+  ) {
+    return 'technical_qualified';
+  }
+  if (tech === 'in progress' || header.includes('technical evaluation')) {
+    return 'filed';
+  }
+  if (participated) return 'filed';
+  return 'not_filed';
+}
+
 export function parseProgressStages(card: HTMLElement, processStatus: string): string[] {
   const cardText = card.innerText.toUpperCase();
   const lines: string[] = [];
+  const stageDefs =
+    cardText.includes('TECHNICAL EVALUATION') || cardText.includes('FINANCIAL EVALUATION')
+      ? STAGE_DEFS
+      : cardText.includes('EVALUATION') && cardText.includes('BID AWARD')
+        ? ([
+            { key: 'EVALUATION', label: 'Technical Evaluation' },
+            { key: 'BID AWARD', label: 'Bid Award' },
+          ] as const)
+        : STAGE_DEFS;
 
-  for (const stage of STAGE_DEFS) {
+  for (const stage of stageDefs) {
     if (!cardText.includes(stage.key)) continue;
 
     const el = findStageElement(card, stage.key);
@@ -195,19 +303,45 @@ export function parseGemCardStatus(card: HTMLElement): GemCardStatus {
     /\bparticipated\b/i.test(text) ||
     /technical evaluation|financial evaluation|bid award/i.test(processStatus.toLowerCase());
 
-  let status: TenderStatus = participatedContext ? 'filed' : 'not_filed';
+  const stageLines = parseProgressStages(card, processStatus);
+  const gemCurrentStage =
+    stageLines.length > 0
+      ? stageLines.join(' → ')
+      : processStatus
+        ? `${processStatus} (process)`
+        : '';
+
+  const selfAwarded = detectSelfBidAward(text);
+  const bidAward = stageState(stageLines, 'bid award');
+  let status = deriveStatusFromGemProgress(
+    processStatus,
+    technicalStatus,
+    stageLines,
+    participatedContext,
+    text,
+  );
   let outcome = participatedContext ? 'Participated' : '';
 
-  if (technicalStatus) {
-    const mapped = mapTechnicalResult(technicalStatus);
-    status = mapped.status;
-    outcome = mapped.outcome;
+  if (technicalStatus && mapTechnicalResult(technicalStatus).status === 'disqualified') {
+    outcome = 'Disqualified';
+  } else if (status === 'won_bid' || selfAwarded) {
+    outcome = 'Won the Bid';
+  } else if (
+    bidAward === 'completed' ||
+    bidAward === 'in progress' ||
+    /bid award|bid \/ ra award/i.test(processStatus)
+  ) {
+    outcome = bidAwardOutcome(bidAward, false);
+  } else if (technicalStatus) {
+    outcome = mapTechnicalResult(technicalStatus).outcome;
+  } else if (status === 'financial') {
+    outcome = 'Financial Evaluation';
   }
 
   return {
     status,
     outcome,
-    gemCurrentStage: buildGemCurrentStage(card, processStatus),
+    gemCurrentStage,
     gemParticipation: participatedContext ? 'Participated' : '',
   };
 }

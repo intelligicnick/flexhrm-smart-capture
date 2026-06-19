@@ -25,8 +25,8 @@ describe('GeM tender extraction', () => {
     expect(t.bidNo).toBe('GEM/2026/B/7590568');
     expect(t.category).toContain('Facility Management');
     expect(t.gemQuantity).toContain('Project');
-    expect(t.endDate).toContain('17-06-2026');
-    expect(t.startDate).toContain('27-05-2026');
+    expect(t.endDate).toBe('17-06-2026 15:00:00');
+    expect(t.startDate).toBe('27-05-2026');
     expect(t.filedDate).toBe('');
     expect(t.status).toBe('not_filed');
     expect(t.outcome).toBe('');
@@ -52,7 +52,8 @@ Start Date: 01-06-2026 10:00:00
     expect(t.organisation).toContain('Kendriya Vidyalaya Sangathan');
     expect(t.consigneeOfficer).toContain('Shankar Singh');
     expect(t.address).toContain('342306');
-    expect(t.endDate).toContain('18-06-2026');
+    expect(t.endDate).toBe('18-06-2026 13:00:00');
+    expect(t.startDate).toBe('01-06-2026');
   });
 
   it('does not put address fragments into consignee officer on card text', async () => {

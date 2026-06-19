@@ -5,10 +5,12 @@ import { ReviewPanel } from './components/ReviewPanel';
 import { TenderReviewPanel } from './TenderReviewPanel';
 import { loadConfig } from '../shared/services/secure-storage';
 import { GEM_SELLER_BIDS_URL } from '../shared/utils/gem-url';
+import { StatusAlert } from '../shared/components/StatusAlert';
 import '../shared/styles/global.css';
 
 export function App() {
   const [connectedAs, setConnectedAs] = useState('');
+  const [isConfigured, setIsConfigured] = useState(false);
   const [syncingQueue, setSyncingQueue] = useState(false);
   const {
     tab,
@@ -35,6 +37,8 @@ export function App() {
 
   useEffect(() => {
     void loadConfig().then((config) => {
+      const configured = !!(config?.flexhrmUrl && config?.accessToken);
+      setIsConfigured(configured);
       if (config?.username) setConnectedAs(config.username);
     });
   }, []);
@@ -94,6 +98,15 @@ export function App() {
       </header>
 
       <main className="p-4">
+        {!isConfigured && (
+          <StatusAlert
+            tone="warning"
+            title="Not connected to FlexHRM"
+            message="Tenders cannot be saved until you connect the extension."
+            hint="Open Settings, paste your API URL and a fresh connection code from FlexHRM Profile → Browser Extension."
+          />
+        )}
+
         {tab === 'tenders' && tenderBatch && tenderBatch.status !== 'saved' && (
           <TenderReviewPanel
             batch={tenderBatch}

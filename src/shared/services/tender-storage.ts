@@ -2,12 +2,24 @@ import type { TenderCaptureBatch } from '../types';
 
 const TENDER_BATCHES_KEY = 'tender_capture_batches';
 
+function assertExtensionContext(): void {
+  try {
+    if (!chrome?.runtime?.id) {
+      throw new Error('Extension context invalidated');
+    }
+  } catch {
+    throw new Error('Extension context invalidated');
+  }
+}
+
 export async function getTenderBatches(): Promise<TenderCaptureBatch[]> {
+  assertExtensionContext();
   const result = await chrome.storage.local.get(TENDER_BATCHES_KEY);
   return (result[TENDER_BATCHES_KEY] as TenderCaptureBatch[]) ?? [];
 }
 
 export async function saveTenderBatch(batch: TenderCaptureBatch): Promise<void> {
+  assertExtensionContext();
   const batches = await getTenderBatches();
   const idx = batches.findIndex((b) => b.id === batch.id);
   if (idx >= 0) batches[idx] = batch;

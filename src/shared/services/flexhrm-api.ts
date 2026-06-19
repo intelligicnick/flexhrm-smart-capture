@@ -9,17 +9,31 @@ import type {
 } from '../types';
 import { tenderToFlexHRMPayload } from '../../modules/tenders/gem-extractor';
 import { resolveFlexHrmApiUrl } from '../utils/resolve-api-url';
+import {
+  formatHttpApiError,
+  formatThrownError,
+  formatUserFacingErrorText,
+  type UserFacingError,
+} from '../utils/api-error-messages';
 import { loadConfig } from './secure-storage';
 import { enqueue } from './storage';
 
 export class FlexHRMApiError extends Error {
-  constructor(
-    message: string,
-    public status?: number,
-  ) {
-    super(message);
+  public userFacing: UserFacingError;
+
+  constructor(userFacing: UserFacingError, public status?: number) {
+    super(formatUserFacingErrorText(userFacing));
     this.name = 'FlexHRMApiError';
+    this.userFacing = userFacing;
   }
+}
+
+function throwApiError(body: string, status?: number, context: 'connect' | 'test' | 'save' | 'request' = 'request'): never {
+  throw new FlexHRMApiError(formatHttpApiError(body, status, context), status);
+}
+
+function wrapFetchError(err: unknown, context: 'connect' | 'test' | 'save' | 'request'): never {
+  throw new FlexHRMApiError(formatThrownError(err, context));
 }
 
 function apiBase(config: FlexHRMConfig, resolvedOrigin: string): string {
@@ -33,16 +47,19 @@ async function resolveConfigOrigin(config: FlexHRMConfig): Promise<string> {
 async function readJsonResponse<T>(response: Response): Promise<T> {
   const text = await response.text().catch(() => '');
   const trimmed = text.trim();
-  if (trimmed.startsWith('<!') || trimmed.toLowerCase().startsWith('<html')) {
-    throw new FlexHRMApiError(
-      'Got an HTML page instead of JSON. In extension Settings, use your FlexHRM API URL — not the login page URL. Copy the API URL from FlexHRM profile → Browser Extension.',
-    );
+  if (isHtmlBody(trimmed)) {
+    throwApiError(trimmed);
   }
   try {
     return JSON.parse(text) as T;
   } catch {
-    throw new FlexHRMApiError(text || 'Invalid JSON response from FlexHRM API.');
+    throwApiError(text || 'Invalid JSON response from FlexHRM API.');
   }
+}
+
+function isHtmlBody(text: string): boolean {
+  const trimmed = text.trim();
+  return trimmed.startsWith('<!') || trimmed.toLowerCase().startsWith('<html');
 }
 
 function authHeaders(config: FlexHRMConfig): HeadersInit {
@@ -65,21 +82,30 @@ async function request<T>(
 ): Promise<T> {
   const origin = await resolveConfigOrigin(config);
   if (!origin.startsWith('https://') && !origin.includes('localhost')) {
-    throw new FlexHRMApiError('FlexHRM URL must use HTTPS in production.');
+    throw new FlexHRMApiError({
+      title: 'HTTPS required',
+      message: 'FlexHRM URL must use HTTPS in production.',
+      hint: 'For local development, use http://localhost:3000 or http://localhost:3001.',
+    });
   }
 
   const url = `${apiBase(config, origin)}${path}`;
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      ...authHeaders(config),
-      ...(options.headers ?? {}),
-    },
-  });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...options,
+      headers: {
+        ...authHeaders(config),
+        ...(options.headers ?? {}),
+      },
+    });
+  } catch (err) {
+    wrapFetchError(err, 'request');
+  }
 
   if (!response.ok) {
     const text = await response.text().catch(() => '');
-    throw new FlexHRMApiError(text || `Request failed (${response.status})`, response.status);
+    throwApiError(text, response.status, 'request');
   }
 
   return readJsonResponse<T>(response);
@@ -93,30 +119,44 @@ export async function connectWithCode(
   flexhrmUrl: string,
   code: string,
 ): Promise<FlexHRMConfig> {
+  const trimmedCode = code.trim().toUpperCase();
+  if (!trimmedCode) {
+    throw new FlexHRMApiError({
+      title: 'Code required',
+      message: 'Enter the connection code from FlexHRM profile → Browser Extension.',
+    });
+  }
+  if (!/^FH-[A-F0-9]{6}$/.test(trimmedCode)) {
+    throw new FlexHRMApiError({
+      title: 'Invalid code format',
+      message: 'Connection codes look like FH-ABC123 (6 characters after FH-).',
+      hint: 'Copy the full code from FlexHRM — do not type it manually if possible.',
+    });
+  }
+
   const apiOrigin = await resolveFlexHrmApiUrl(flexhrmUrl);
-  const response = await fetch(`${apiOrigin}/api/smart-capture/connect`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ code: code.trim().toUpperCase(), flexhrmUrl: apiOrigin }),
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${apiOrigin}/api/smart-capture/connect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: trimmedCode, flexhrmUrl: apiOrigin }),
+    });
+  } catch (err) {
+    wrapFetchError(err, 'connect');
+  }
 
   if (!response.ok) {
     const text = await response.text().catch(() => '');
-    const trimmed = text.trim();
-    if (trimmed.startsWith('<!') || trimmed.toLowerCase().startsWith('<html')) {
-      throw new FlexHRMApiError(
-        'Got an HTML page instead of JSON. Use your FlexHRM API URL — not the login page URL.',
-      );
-    }
-    throw new FlexHRMApiError(text || `Connection failed (${response.status})`, response.status);
+    throwApiError(text, response.status, 'connect');
   }
 
-  const data = (await readJsonResponse<{
+  const data = await readJsonResponse<{
     flexhrmUrl: string;
     accessToken: string;
     organizationId: string;
     username: string;
-  }>(response));
+  }>(response);
 
   return {
     flexhrmUrl: data.flexhrmUrl || apiOrigin,

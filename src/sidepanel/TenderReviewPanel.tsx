@@ -3,6 +3,9 @@ import type { ExtractedTender, TenderCaptureBatch, TenderType } from '../shared/
 import { saveTenderBatch } from '../shared/services/tender-storage';
 import { sendExtensionMessage } from '../shared/utils/messaging';
 import { FieldEditor } from '../shared/components/FieldEditor';
+import { StatusAlert } from '../shared/components/StatusAlert';
+import { formatThrownError } from '../shared/utils/api-error-messages';
+import { FlexHRMApiError } from '../shared/services/flexhrm-api';
 
 interface Props {
   batch: TenderCaptureBatch;
@@ -15,6 +18,11 @@ export function TenderReviewPanel({ batch, onBatchChange, onSaved }: Props) {
   const [existingBids, setExistingBids] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
+  const [errorAlert, setErrorAlert] = useState<{
+    title: string;
+    message: string;
+    hint?: string;
+  } | null>(null);
 
   const tender = batch.tenders[selectedIdx];
 
@@ -35,13 +43,23 @@ export function TenderReviewPanel({ batch, onBatchChange, onSaved }: Props) {
   const handleSaveAll = async () => {
     setSaving(true);
     setMessage('');
+    setErrorAlert(null);
     try {
       const result = await sendExtensionMessage({
         type: 'SAVE_TENDER_BATCH',
         payload: batch,
       });
-      if (!result) {
-        setMessage('Save failed — extension not responding.');
+      if (!result?.success) {
+        const facing = (result as { userFacing?: { title: string; message: string; hint?: string } })
+          ?.userFacing;
+        if (facing) {
+          setErrorAlert(facing);
+        } else {
+          setErrorAlert({
+            title: 'Save failed',
+            message: (result as { error?: string })?.error || 'Extension could not save tenders.',
+          });
+        }
         return;
       }
       setMessage(
@@ -49,7 +67,9 @@ export function TenderReviewPanel({ batch, onBatchChange, onSaved }: Props) {
       );
       onSaved();
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : 'Save failed');
+      const facing =
+        err instanceof FlexHRMApiError ? err.userFacing : formatThrownError(err, 'save');
+      setErrorAlert(facing);
     } finally {
       setSaving(false);
     }
@@ -148,11 +168,16 @@ export function TenderReviewPanel({ batch, onBatchChange, onSaved }: Props) {
         <FieldEditor label="Notes" field="notes" value={tender.notes} onChange={(v) => updateTender({ notes: v })} />
       </div>
 
-      {message && (
-        <p className={`text-sm ${message.includes('failed') ? 'text-red-600' : 'text-emerald-600'}`}>
-          {message}
-        </p>
+      {errorAlert && (
+        <StatusAlert
+          tone="error"
+          title={errorAlert.title}
+          message={errorAlert.message}
+          hint={errorAlert.hint}
+        />
       )}
+
+      {message && <p className="text-sm text-emerald-600">{message}</p>}
 
       <button
         type="button"

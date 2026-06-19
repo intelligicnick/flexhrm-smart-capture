@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildGemCurrentStage,
+  deriveStatusFromGemProgress,
+  detectSelfBidAward,
   extractProcessStatus,
   mapTechnicalResult,
   parseGemCardStatus,
@@ -76,12 +78,12 @@ describe('GeM listing status parsing', () => {
     expect(status.status).not.toBe('won_bid');
   });
 
-  it('parses qualified + bid award as qualified, not won', () => {
+  it('parses qualified + bid award as bid-award stage, not won', () => {
     document.body.innerHTML = `<div class="card">${QUALIFIED_AWARDED_CARD}</div>`;
     const card = document.querySelector('.card') as HTMLElement;
     const status = parseGemCardStatus(card);
-    expect(status.status).toBe('technical_qualified');
-    expect(status.outcome).toBe('Qualified');
+    expect(status.status).toBe('qualified');
+    expect(status.outcome).toBe('Bid Award in Progress');
     expect(status.gemCurrentStage.toLowerCase()).toContain('bid award');
     expect(status.status).not.toBe('won_bid');
   });
@@ -98,7 +100,51 @@ describe('GeM listing status parsing', () => {
     document.body.innerHTML = `<div class="card">${QUALIFIED_AWARDED_CARD}</div>`;
     const card = document.querySelector('.card') as HTMLElement;
     const stages = parseProgressStages(card, 'Bid Award');
-    expect(stages.some((s) => /bid award \(completed\)/i.test(s))).toBe(true);
+    expect(stages.some((s) => /bid award \(in progress\)/i.test(s))).toBe(true);
     expect(buildGemCurrentStage(card, 'Bid Award')).toContain('→');
+  });
+
+  it('derives status from coloured progress stages', () => {
+    const financialInProgress = [
+      'Technical Evaluation (completed)',
+      'Financial Evaluation (in progress)',
+      'Bid Award (pending)',
+    ];
+    expect(
+      deriveStatusFromGemProgress('Financial Evaluation', 'Qualified', financialInProgress, true),
+    ).toBe('financial');
+
+    const bidAwardComplete = [
+      'Technical Evaluation (completed)',
+      'Financial Evaluation (completed)',
+      'Bid Award (completed)',
+    ];
+    expect(
+      deriveStatusFromGemProgress('Bid Award', 'Qualified', bidAwardComplete, true),
+    ).toBe('qualified');
+    expect(
+      deriveStatusFromGemProgress(
+        'Bid Award',
+        'Qualified',
+        bidAwardComplete,
+        true,
+        'Your bid is selected. L1 bidder.',
+      ),
+    ).toBe('won_bid');
+
+    const technicalInProgress = [
+      'Technical Evaluation (in progress)',
+      'Financial Evaluation (pending)',
+      'Bid Award (pending)',
+    ];
+    expect(
+      deriveStatusFromGemProgress('Technical Evaluation', '', technicalInProgress, true),
+    ).toBe('filed');
+  });
+
+  it('detects self win only from explicit GeM winner text', () => {
+    expect(detectSelfBidAward('Status: Bid Award\nL1 Selected')).toBe(true);
+    expect(detectSelfBidAward('Status: Bid Award\nBid Award (completed)')).toBe(false);
+    expect(detectSelfBidAward('Status: Bid Award\nNot Selected')).toBe(false);
   });
 });

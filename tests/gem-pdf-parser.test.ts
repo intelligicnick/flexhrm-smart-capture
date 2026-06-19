@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   formatPreBidDisplay,
+  normalizeGemPdfDate,
+  normalizeGemPdfDateTime,
   parseGemBidPdfText,
 } from '../src/modules/tenders/gem-pdf-parser';
 
@@ -94,6 +96,7 @@ Estimated Bid Value in INR 500000
 
 const GEM_POSTS_BILINGUAL_PDF = `
 Bid End Date/Time 18-06-2026 12:00:00
+Bid Start Date/Time 01-06-2026 10:00:00
 Ministry/State Name Ministry Of Communications
 Department Name Department Of Posts
 Organisation Name Department Of Posts
@@ -107,8 +110,18 @@ Additional Requirement 5 / 10 1 Twinkle Singh 110021,Sr. Supdt of Post offices, 
 `;
 
 describe('GeM PDF parser', () => {
+  it('normalizes PDF dates to DD-MM-YYYY and times to 24-hour format', () => {
+    expect(normalizeGemPdfDate('27-5-2026')).toBe('27-05-2026');
+    expect(normalizeGemPdfDateTime('10-06-2026 3:00 PM')).toBe('10-06-2026 15:00:00');
+    expect(normalizeGemPdfDateTime('15-06-2026 11:00 AM')).toBe('15-06-2026 11:00:00');
+    expect(normalizeGemPdfDateTime('01-06-2026 15:00:00')).toBe('01-06-2026 15:00:00');
+    expect(normalizeGemPdfDate('01-06-2026 10:00:00')).toBe('01-06-2026');
+  });
+
   it('extracts bilingual GeM bid PDF fields (Department of Posts sample)', () => {
     const details = parseGemBidPdfText(GEM_POSTS_BILINGUAL_PDF);
+    expect(details.startDate).toBe('01-06-2026');
+    expect(details.endDate).toBe('18-06-2026 12:00:00');
     expect(details.ministry).toBe('Ministry Of Communications');
     expect(details.organisation).toBe('Department Of Posts');
     expect(details.consigneeOfficer).toBe('Twinkle Singh');
@@ -152,7 +165,7 @@ describe('GeM PDF parser', () => {
 
   it('extracts pre-bid and consignee location from bid PDF text', () => {
     const details = parseGemBidPdfText(SAMPLE_PDF);
-    expect(details.preBidAt).toContain('15-06-2026');
+    expect(details.preBidAt).toBe('15-06-2026 11:00:00');
     expect(details.rate).toBe('');
     expect(details.description).toBe('');
     expect(details.address.toLowerCase()).toContain('mumbai');
@@ -162,8 +175,7 @@ describe('GeM PDF parser', () => {
 
   it('extracts pre-bid from flat GeM NIT text', () => {
     const details = parseGemBidPdfText(GEM_NIT_FLAT);
-    expect(details.preBidAt).toContain('10-06-2026');
-    expect(details.preBidAt).toMatch(/3:00 PM/i);
+    expect(details.preBidAt).toBe('10-06-2026 15:00:00');
     expect(details.rate).toBe('');
     expect(details.description).toBe('');
     expect(details.preBidAddress.toLowerCase()).toContain('mumbai');
@@ -171,8 +183,7 @@ describe('GeM PDF parser', () => {
 
   it('extracts pre-bid from multiline GeM table PDF text', () => {
     const details = parseGemBidPdfText(GEM_MULTILINE_PDF);
-    expect(details.preBidAt).toContain('20-06-2026');
-    expect(details.preBidAt).toMatch(/3:00 PM/i);
+    expect(details.preBidAt).toBe('20-06-2026 15:00:00');
     expect(details.preBidAddress.toLowerCase()).toContain('new delhi');
     expect(details.rate).toBe('');
     expect(details.noPreBid).toBe(false);
@@ -205,7 +216,7 @@ describe('GeM PDF parser', () => {
 
   it('formats pre-bid display with venue', () => {
     expect(formatPreBidDisplay('20-06-2026 3:00 PM', 'PMO Conference Hall')).toBe(
-      '20-06-2026 3:00 PM @ PMO Conference Hall',
+      '20-06-2026 15:00:00 @ PMO Conference Hall',
     );
   });
 

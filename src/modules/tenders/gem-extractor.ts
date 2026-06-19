@@ -1,5 +1,5 @@
 import type { ExtractedTender, TenderStatus, TenderType } from '../../shared/types';
-import { parseGemOrganisationFromText } from './gem-pdf-parser';
+import { parseGemOrganisationFromText, normalizeGemPdfDate, normalizeGemPdfDateTime } from './gem-pdf-parser';
 
 const BID_NO_RE = /GEM\/\d{4}\/B\/\d+/gi;
 
@@ -46,14 +46,17 @@ function extractLabelValue(text: string, labels: string[]): string {
   return '';
 }
 
-function extractDateAfterLabel(text: string, labels: string[]): string {
+function extractDateAfterLabel(text: string, labels: string[], dateOnly = false): string {
   for (const label of labels) {
     const pattern = new RegExp(
       `${label}\\s*[:\\-]?\\s*(\\d{1,2}[-/]\\d{1,2}[-/]\\d{4}(?:\\s+\\d{1,2}:\\d{2}(?::\\d{2})?\\s*(?:AM|PM)?)?)`,
       'i',
     );
     const match = text.match(pattern);
-    if (match?.[1]?.trim()) return match[1].trim();
+    if (match?.[1]?.trim()) {
+      const raw = match[1].trim();
+      return dateOnly ? normalizeGemPdfDate(raw) : normalizeGemPdfDateTime(raw);
+    }
   }
   return '';
 }
@@ -287,7 +290,7 @@ function parseTenderCard(card: HTMLElement, sourceUrl: string): ExtractedTender 
     'Start Date',
     'Bid Start Date',
     'Bid Start Date/Time',
-  ]);
+  ], true);
   const gemEndDate = extractDateAfterLabel(card.innerText, [
     'End Date',
     'Bid End Date',

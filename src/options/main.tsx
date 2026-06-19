@@ -2,8 +2,10 @@ import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { FlexHRMConfig } from '../shared/types';
 import { loadConfig, saveConfig, clearConfig } from '../shared/services/secure-storage';
-import { connectWithCode, testConnection } from '../shared/services/flexhrm-api';
+import { connectWithCode, FlexHRMApiError, testConnection } from '../shared/services/flexhrm-api';
 import { GEM_SELLER_BIDS_URL } from '../shared/utils/gem-url';
+import { formatThrownError, type UserFacingError } from '../shared/utils/api-error-messages';
+import { StatusAlert } from '../shared/components/StatusAlert';
 import '../shared/styles/global.css';
 
 function Spinner({ className = '' }: { className?: string }) {
@@ -24,8 +26,8 @@ function OptionsPage() {
     username: '',
   });
   const [connectionCode, setConnectionCode] = useState('');
-  const [message, setMessage] = useState('');
-  const [messageTone, setMessageTone] = useState<'ok' | 'error'>('ok');
+  const [statusAlert, setStatusAlert] = useState<UserFacingError | null>(null);
+  const [statusTone, setStatusTone] = useState<'ok' | 'error'>('ok');
   const [testing, setTesting] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -42,32 +44,53 @@ function OptionsPage() {
     });
   }, []);
 
-  const setStatus = (text: string, tone: 'ok' | 'error' = 'ok') => {
-    setMessage(text);
-    setMessageTone(tone);
+  const showStatus = (next: UserFacingError | string, tone: 'ok' | 'error' = 'ok') => {
+    if (typeof next === 'string') {
+      setStatusTone(tone);
+      setStatusAlert(
+        tone === 'ok'
+          ? { title: 'Success', message: next }
+          : { title: 'Something went wrong', message: next },
+      );
+      return;
+    }
+    setStatusTone(tone);
+    setStatusAlert(next);
+  };
+
+  const setError = (err: unknown, context: 'connect' | 'test' = 'connect') => {
+    if (err instanceof FlexHRMApiError) {
+      showStatus(err.userFacing, 'error');
+      return;
+    }
+    showStatus(formatThrownError(err, context), 'error');
   };
 
   const handleConnect = async () => {
     if (!connectionCode.trim()) {
-      setStatus('Enter the connection code from FlexHRM profile.', 'error');
+      showStatus('Enter the connection code from FlexHRM profile.', 'error');
       return;
     }
     if (!config.flexhrmUrl.trim()) {
-      setStatus('Enter your FlexHRM URL first.', 'error');
+      showStatus('Enter your FlexHRM URL first.', 'error');
       return;
     }
 
     setConnecting(true);
-    setMessage('');
+    setStatusAlert(null);
     try {
       const connected = await connectWithCode(config.flexhrmUrl, connectionCode);
       await saveConfig(connected);
       setConfig(connected);
       setConnectedAs(connected.username);
       setConnectionCode('');
-      setStatus(`Connected as ${connected.username}. Open GeM Seller Bids to capture tenders.`);
+      showStatus({
+        title: 'Connected',
+        message: `Signed in as ${connected.username}.`,
+        hint: 'Open GeM Seller Bids to capture tenders.',
+      });
     } catch (err) {
-      setStatus(err instanceof Error ? err.message : 'Connection failed', 'error');
+      setError(err, 'connect');
     } finally {
       setConnecting(false);
     }
@@ -78,7 +101,7 @@ function OptionsPage() {
     try {
       await saveConfig(config);
       setConnectedAs(config.username);
-      setStatus('Configuration saved securely.');
+      showStatus({ title: 'Saved', message: 'Configuration saved securely.' });
     } finally {
       setSaving(false);
     }
@@ -86,12 +109,12 @@ function OptionsPage() {
 
   const handleTest = async () => {
     setTesting(true);
-    setMessage('');
+    setStatusAlert(null);
     try {
       await testConnection(config);
-      setStatus('Connection successful.');
+      showStatus({ title: 'Connection OK', message: 'FlexHRM API is reachable and your session is valid.' });
     } catch (err) {
-      setStatus(err instanceof Error ? err.message : 'Connection failed', 'error');
+      setError(err, 'test');
     } finally {
       setTesting(false);
     }
@@ -102,7 +125,7 @@ function OptionsPage() {
     try {
       await clearConfig();
       setConnectedAs('');
-      setStatus('Credentials cleared.');
+      showStatus({ title: 'Cleared', message: 'Saved credentials were removed from this extension.' });
     } finally {
       setClearing(false);
     }
@@ -235,10 +258,15 @@ function OptionsPage() {
         </button>
       </div>
 
-      {message && (
-        <p className={`mt-4 text-sm ${messageTone === 'error' ? 'text-red-600' : 'text-emerald-700'}`}>
-          {message}
-        </p>
+      {statusAlert && (
+        <div className="mt-4">
+          <StatusAlert
+            tone={statusTone === 'error' ? 'error' : 'ok'}
+            title={statusAlert.title}
+            message={statusAlert.message}
+            hint={statusAlert.hint}
+          />
+        </div>
       )}
 
       <section className="mt-8 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
