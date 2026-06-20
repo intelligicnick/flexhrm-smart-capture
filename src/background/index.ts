@@ -36,7 +36,6 @@ import type { GemPdfDetails } from '../modules/tenders/gem-pdf-parser';
 import { broadcastExtensionEvent, isIgnorableRuntimeError } from '../shared/utils/messaging';
 import { formatThrownError, formatUserFacingErrorText } from '../shared/utils/api-error-messages';
 import { FlexHRMApiError } from '../shared/services/flexhrm-api';
-
 const CONTEXT_MENU_ID = 'flexhrm-save-selection';
 const SELLER_BIDS_MATCH = 'https://bidplus.gem.gov.in/seller-bids*';
 
