@@ -1,29 +1,130 @@
 import type { ExtractedTender } from '../../shared/types';
-import { extractGemTendersFromPage, findTenderCards } from './gem-extractor';
+import { EMPTY_TENDER } from '../../shared/types';
+import {
+  extractGemTendersFromPage,
+  extractTenderFromCard,
+  findTenderCards,
+} from './gem-extractor';
+import {
+  loadGemSelectionState,
+  saveGemSelectionState,
+} from './gem-selection-storage';
 import { requestOpenSidePanel } from '../../shared/utils/messaging';
 
 const CHECKBOX_CLASS = 'flexhrm-gem-checkbox';
 const CARD_ATTR = 'data-flexhrm-bid';
 
 const selectedBids = new Set<string>();
+/** Tender metadata captured when each bid is selected (persists across pagination). */
+const selectedTenderCache = new Map<string, ExtractedTender>();
+
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
+let selectionReady = false;
+
+function normalizeBidNo(bidNo: string): string {
+  return bidNo.toUpperCase();
+}
+
+function resolveBidNoFromCard(card: HTMLElement): string | null {
+  const fromAttr = card.getAttribute(CARD_ATTR);
+  if (fromAttr) return normalizeBidNo(fromAttr);
+  const match = card.innerText.match(/GEM\/\d{4}\/B\/\d+/i);
+  return match ? normalizeBidNo(match[0]) : null;
+}
+
+function cacheTenderFromCard(card: HTMLElement, bidNo: string): void {
+  const tender = extractTenderFromCard(card);
+  if (tender) {
+    selectedTenderCache.set(normalizeBidNo(bidNo), tender);
+    schedulePersistSelection();
+  }
+}
+
+function removeCachedTender(bidNo: string): void {
+  selectedTenderCache.delete(normalizeBidNo(bidNo));
+  schedulePersistSelection();
+}
+
+function createMinimalTender(bidNo: string): ExtractedTender {
+  return {
+    ...EMPTY_TENDER,
+    bidNo: normalizeBidNo(bidNo),
+    sourceUrl: window.location.href,
+    entryDate: new Date().toISOString().slice(0, 10),
+    notes: `Source: ${window.location.href}\nListing details incomplete — re-open this bid on GeM if fields are missing.`,
+  };
+}
+
+function schedulePersistSelection(): void {
+  if (persistTimer) clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => {
+    void saveGemSelectionState(selectedBids, selectedTenderCache);
+  }, 200);
+}
+
+function selectTenderCard(card: HTMLElement): void {
+  const bidNo = resolveBidNoFromCard(card);
+  if (!bidNo) return;
+  card.setAttribute(CARD_ATTR, bidNo);
+  selectedBids.add(bidNo);
+  cacheTenderFromCard(card, bidNo);
+}
+
+function refreshVisibleSelectedCache(): void {
+  for (const card of findTenderCards()) {
+    const bidNo = resolveBidNoFromCard(card);
+    if (bidNo && selectedBids.has(bidNo)) {
+      card.setAttribute(CARD_ATTR, bidNo);
+      cacheTenderFromCard(card, bidNo);
+    }
+  }
+}
+
+export async function initGemSelectionState(): Promise<void> {
+  const saved = await loadGemSelectionState();
+  if (saved) {
+    selectedBids.clear();
+    selectedTenderCache.clear();
+    for (const bid of saved.bids) {
+      selectedBids.add(normalizeBidNo(bid));
+    }
+    for (const [bid, tender] of Object.entries(saved.tenders)) {
+      selectedTenderCache.set(normalizeBidNo(bid), tender);
+    }
+  }
+  selectionReady = true;
+  updateSelectionBar();
+}
 
 export function getSelectedBidNos(): string[] {
   return [...selectedBids];
 }
 
+export function getCachedTenderCount(): number {
+  return selectedTenderCache.size;
+}
+
+export async function flushGemSelectionState(): Promise<void> {
+  if (persistTimer) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
+  await saveGemSelectionState(selectedBids, selectedTenderCache);
+}
+
 export function clearGemSelection(): void {
   selectedBids.clear();
+  selectedTenderCache.clear();
   document.querySelectorAll(`.${CHECKBOX_CLASS}`).forEach((el) => {
     (el as HTMLInputElement).checked = false;
   });
+  schedulePersistSelection();
   updateSelectionBar();
 }
 
 export function selectAllGemTenders(): void {
-  const cards = findTenderCards();
-  for (const card of cards) {
-    const bid = card.getAttribute(CARD_ATTR);
-    if (bid) selectedBids.add(bid);
+  for (const card of findTenderCards()) {
+    selectTenderCard(card);
   }
   document.querySelectorAll(`.${CHECKBOX_CLASS}`).forEach((el) => {
     (el as HTMLInputElement).checked = true;
@@ -32,9 +133,33 @@ export function selectAllGemTenders(): void {
 }
 
 export function extractSelectedTenders(): ExtractedTender[] {
-  const all = extractGemTendersFromPage();
   if (selectedBids.size === 0) return [];
-  return all.filter((t) => selectedBids.has(t.bidNo.toUpperCase()));
+
+  refreshVisibleSelectedCache();
+
+  const tenders: ExtractedTender[] = [];
+  for (const bid of selectedBids) {
+    const normalized = normalizeBidNo(bid);
+    const cached = selectedTenderCache.get(normalized);
+    if (cached) {
+      tenders.push(cached);
+      continue;
+    }
+
+    const fromPage = extractGemTendersFromPage().find(
+      (t) => normalizeBidNo(t.bidNo) === normalized,
+    );
+    if (fromPage) {
+      selectedTenderCache.set(normalized, fromPage);
+      tenders.push(fromPage);
+      continue;
+    }
+
+    tenders.push(createMinimalTender(normalized));
+  }
+
+  schedulePersistSelection();
+  return tenders;
 }
 
 function findBidNoAnchor(card: HTMLElement, bidNo: string): HTMLElement {
@@ -58,7 +183,13 @@ function findBidNoAnchor(card: HTMLElement, bidNo: string): HTMLElement {
 }
 
 function mountCheckbox(card: HTMLElement, bidNo: string): void {
-  if (card.querySelector(`[data-flexhrm-checkbox-for="${bidNo}"]`)) return;
+  const existing = card.querySelector(`[data-flexhrm-checkbox-for="${bidNo}"]`);
+  if (existing) {
+    if (selectedBids.has(bidNo)) {
+      cacheTenderFromCard(card, bidNo);
+    }
+    return;
+  }
 
   const wrap = document.createElement('label');
   wrap.setAttribute('data-flexhrm-checkbox-for', bidNo);
@@ -76,9 +207,16 @@ function mountCheckbox(card: HTMLElement, bidNo: string): void {
   checkbox.type = 'checkbox';
   checkbox.className = CHECKBOX_CLASS;
   checkbox.checked = selectedBids.has(bidNo);
+  if (checkbox.checked) {
+    cacheTenderFromCard(card, bidNo);
+  }
   checkbox.addEventListener('change', () => {
-    if (checkbox.checked) selectedBids.add(bidNo);
-    else selectedBids.delete(bidNo);
+    if (checkbox.checked) {
+      selectTenderCard(card);
+    } else {
+      selectedBids.delete(bidNo);
+      removeCachedTender(bidNo);
+    }
     updateSelectionBar();
   });
 
@@ -106,13 +244,13 @@ export function injectGemSelectionUi(): void {
   if (cards.length === 0) return;
 
   for (const card of cards) {
-    const bidMatch = card.innerText.match(/GEM\/\d{4}\/B\/\d+/i);
-    if (!bidMatch) continue;
-    const bidNo = bidMatch[0].toUpperCase();
+    const bidNo = resolveBidNoFromCard(card);
+    if (!bidNo) continue;
     card.setAttribute(CARD_ATTR, bidNo);
     mountCheckbox(card, bidNo);
   }
 
+  refreshVisibleSelectedCache();
   ensureSelectionBar();
   updateSelectionBar();
 }
@@ -204,6 +342,8 @@ export function setGemPullLoading(loading: boolean): void {
 }
 
 function updateSelectionBar(): void {
+  if (!selectionReady && selectedBids.size === 0) return;
+
   const countEl = document.getElementById('flexhrm-gem-selection-count');
   const pullBtn = document.getElementById('flexhrm-gem-pull-btn') as HTMLButtonElement | null;
   const syncBtn = document.getElementById('flexhrm-gem-sync-btn') as HTMLButtonElement | null;

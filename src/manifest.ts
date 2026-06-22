@@ -3,7 +3,7 @@ import { defineManifest } from '@crxjs/vite-plugin';
 export default defineManifest({
   manifest_version: 3,
   name: 'FlexHRM Smart Capture',
-  version: '1.0.0',
+  version: '1.0.1',
   description:
     'Capture candidate and HR data from websites and PDFs with AI extraction and save to FlexHRM.',
   icons: {

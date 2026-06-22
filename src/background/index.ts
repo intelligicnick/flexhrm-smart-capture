@@ -209,6 +209,10 @@ async function handleMessage(
       if (payload.batchId) {
         batch = (await getTenderBatches()).find((item) => item.id === payload.batchId) ?? null;
         if (!batch) {
+          const latest = await getLatestTenderBatch();
+          if (latest?.id === payload.batchId) batch = latest;
+        }
+        if (!batch) {
           throw new FlexHRMApiError({
             title: 'Capture failed',
             message: 'Tender batch could not be loaded after save.',

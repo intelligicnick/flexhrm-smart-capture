@@ -175,13 +175,21 @@ function summarizePdfEnrichment(
 
 /** Enrich on the GeM page itself so authenticated cookies are available. */
 export async function enrichTendersFromPdfsOnPage(tenders: ExtractedTender[]) {
-  const results = await Promise.all(
-    tenders.map((tender) =>
-      enrichTenderFromPdfWithFetcher(tender, (docId, fallbackUrl) =>
-        fetchGemBidPdfOnPage(docId, fallbackUrl, tender.bidNo),
+  const results: Array<{ tender: ExtractedTender; ok: boolean; reason?: string }> = [];
+  const concurrency = 4;
+
+  for (let i = 0; i < tenders.length; i += concurrency) {
+    const chunk = tenders.slice(i, i + concurrency);
+    const chunkResults = await Promise.all(
+      chunk.map((tender) =>
+        enrichTenderFromPdfWithFetcher(tender, (docId, fallbackUrl) =>
+          fetchGemBidPdfOnPage(docId, fallbackUrl, tender.bidNo),
+        ),
       ),
-    ),
-  );
+    );
+    results.push(...chunkResults);
+  }
+
   return summarizePdfEnrichment(tenders, results);
 }
 

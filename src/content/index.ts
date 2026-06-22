@@ -16,7 +16,9 @@ import {
 import { enrichTendersFromPdfsOnPage } from '../modules/tenders/gem-pdf-enrich';
 import {
   extractSelectedTenders,
+  flushGemSelectionState,
   getSelectedBidNos,
+  initGemSelectionState,
   injectGemSelectionUi,
   setGemPullLoading,
   setGemSyncLoading,
@@ -62,10 +64,16 @@ function captureGemTenders(
 
   requestOpenSidePanel();
   void (async () => {
-    let enrichedTenders = tenders;
-    let pdfFetched = 0;
-    let pdfFailed = 0;
-    let pdfFailureReasons: string[] = [];
+    const now = new Date().toISOString();
+    const batchId = crypto.randomUUID();
+    let listingBatch: TenderCaptureBatch = {
+      id: batchId,
+      tenders,
+      metadata: getMetadata(),
+      status: 'review',
+      createdAt: now,
+      updatedAt: now,
+    };
 
     postDebugLog({
       hypothesisId: 'H5',
@@ -78,36 +86,7 @@ function captureGemTenders(
     });
 
     try {
-      const enriched = await enrichTendersFromPdfsOnPage(tenders);
-      enrichedTenders = enriched.tenders;
-      pdfFetched = enriched.pdfFetched;
-      pdfFailed = enriched.pdfFailed;
-      pdfFailureReasons = enriched.pdfFailureReasons;
-    } catch (err) {
-      pdfFailureReasons = [
-        `page-enrich: ${err instanceof Error ? err.message : 'unknown error'}`,
-      ];
-    }
-
-    postDebugLog({
-      hypothesisId: 'H6',
-      location: 'content/index.ts:captureGemTenders',
-      message: 'pull selected enrich complete',
-      data: { pdfFetched, pdfFailed, pdfFailureReasons },
-    });
-
-    const now = new Date().toISOString();
-    const batch: TenderCaptureBatch = {
-      id: crypto.randomUUID(),
-      tenders: enrichedTenders,
-      metadata: getMetadata(),
-      status: 'review',
-      createdAt: now,
-      updatedAt: now,
-    };
-
-    try {
-      await saveTenderBatch(batch);
+      await saveTenderBatch(listingBatch);
     } catch (err) {
       const message = err instanceof Error ? err.message : '';
       if (message.includes('Extension context invalidated')) {
@@ -123,50 +102,82 @@ function captureGemTenders(
     }
 
     pingExtensionBackground();
-    const response = await sendExtensionMessage<{
+    const listingResponse = await sendExtensionMessage<{
       success?: boolean;
       error?: string;
       hint?: string;
-      pdfFetched?: number;
-      pdfFailed?: number;
-      pdfFailureReasons?: string[];
+      count?: number;
     }>({
       type: 'CAPTURE_GEM_TENDERS',
       payload: {
-        batchId: batch.id,
+        batchId,
         fetchPdfs: false,
-        pdfFetched,
-        pdfFailed,
-        pdfFailureReasons,
+        phase: 'listing',
       },
     });
 
-    if (!response?.success) {
+    if (!listingResponse?.success) {
       showGemError(
-        response?.error,
-        response?.hint || 'Open chrome://extensions and reload FlexHRM Smart Capture.',
+        listingResponse?.error,
+        listingResponse?.hint || 'Open chrome://extensions and reload FlexHRM Smart Capture.',
       );
       onComplete?.(false);
       return;
     }
 
-    const fetched = Number(response.pdfFetched ?? pdfFetched) || 0;
-    const failed = Number(response.pdfFailed ?? pdfFailed) || 0;
-    const reasons =
-      (Array.isArray(response.pdfFailureReasons) && response.pdfFailureReasons.length > 0
-        ? response.pdfFailureReasons
-        : pdfFailureReasons) ?? [];
-    if (fetched > 0 || failed > 0) {
-      const firstReason = reasons.length > 0 ? ` Reason: ${reasons[0]}.` : '';
-      const msg =
-        failed > 0
-          ? `PDF details loaded for ${fetched} tender(s). ${failed} could not be read (listing data still saved).${firstReason}`
-          : `PDF details loaded for ${fetched} tender(s). Review in sidebar.`;
-      showGemToast(msg);
-    } else {
-      showGemToast(`${batch.tenders.length} tender(s) sent to FlexHRM sidebar.`);
+    showGemToast(
+      `${listingBatch.tenders.length} tender(s) sent to sidebar. Reading PDFs in background…`,
+    );
+    onComplete?.(true, { pdfFetched: 0, pdfFailed: 0, pdfFailureReasons: [] });
+
+    let pdfFetched = 0;
+    let pdfFailed = 0;
+    let pdfFailureReasons: string[] = [];
+
+    try {
+      const enriched = await enrichTendersFromPdfsOnPage(tenders);
+      listingBatch = {
+        ...listingBatch,
+        tenders: enriched.tenders,
+        updatedAt: new Date().toISOString(),
+      };
+      pdfFetched = enriched.pdfFetched;
+      pdfFailed = enriched.pdfFailed;
+      pdfFailureReasons = enriched.pdfFailureReasons;
+
+      await saveTenderBatch(listingBatch);
+      await sendExtensionMessage({
+        type: 'CAPTURE_GEM_TENDERS',
+        payload: {
+          batchId,
+          fetchPdfs: false,
+          pdfFetched,
+          pdfFailed,
+          pdfFailureReasons,
+          phase: 'enriched',
+        },
+      });
+    } catch (err) {
+      pdfFailureReasons = [
+        `page-enrich: ${err instanceof Error ? err.message : 'unknown error'}`,
+      ];
     }
-    onComplete?.(true, response);
+
+    postDebugLog({
+      hypothesisId: 'H6',
+      location: 'content/index.ts:captureGemTenders',
+      message: 'pull selected enrich complete',
+      data: { pdfFetched, pdfFailed, pdfFailureReasons },
+    });
+
+    if (pdfFetched > 0 || pdfFailed > 0) {
+      const firstReason = pdfFailureReasons.length > 0 ? ` Reason: ${pdfFailureReasons[0]}.` : '';
+      const msg =
+        pdfFailed > 0
+          ? `PDF details loaded for ${pdfFetched} of ${listingBatch.tenders.length} tender(s). ${pdfFailed} could not be read.${firstReason}`
+          : `PDF details loaded for ${pdfFetched} tender(s). Review in sidebar.`;
+      showGemToast(msg);
+    }
   })();
 }
 
@@ -197,11 +208,27 @@ function pullSelectedTenders() {
   const fab = document.getElementById(FAB_ID);
   fab?.classList.add('loading');
   setGemPullLoading(true);
-  const tenders = extractSelectedTenders();
-  captureGemTenders(tenders, () => {
-    setGemPullLoading(false);
-    fab?.classList.remove('loading');
-  });
+  void (async () => {
+    await flushGemSelectionState();
+    const selectedCount = getSelectedBidNos().length;
+    const tenders = extractSelectedTenders();
+    const missingDetails = tenders.filter((t) => !t.gemDocId && !t.gemDocUrl).length;
+    if (tenders.length !== selectedCount) {
+      showGemToast(
+        `Loaded ${tenders.length} of ${selectedCount} selected tenders. Refresh GeM and re-select missing bids.`,
+        'error',
+      );
+    } else if (missingDetails > 0) {
+      showGemToast(
+        `${missingDetails} tender(s) are missing listing details. PDF read may fail for those bids.`,
+        'error',
+      );
+    }
+    captureGemTenders(tenders, () => {
+      setGemPullLoading(false);
+      fab?.classList.remove('loading');
+    });
+  })();
 }
 
 function syncSelectedTenderStatuses() {
@@ -339,8 +366,10 @@ function init() {
 
   pingExtensionBackground();
   setupExtensionMessageAck();
-  createFab();
-  setupGemListingUi();
+  void initGemSelectionState().then(() => {
+    createFab();
+    setupGemListingUi();
+  });
   document.addEventListener('flexhrm:pull-selected-tenders', pullSelectedTenders);
   document.addEventListener('flexhrm:sync-selected-tender-statuses', syncSelectedTenderStatuses);
 

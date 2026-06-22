@@ -128,10 +128,10 @@ export async function connectWithCode(
       message: 'Enter the connection code from FlexHRM profile → Browser Extension.',
     });
   }
-  if (!/^FH-[A-F0-9]{6}$/.test(trimmedCode)) {
+  if (!/^FH-[A-F0-9]{24}$/.test(trimmedCode)) {
     throw new FlexHRMApiError({
       title: 'Invalid code format',
-      message: 'Connection codes look like FH-ABC123 (6 characters after FH-).',
+      message: 'Connection codes look like FH-ABC123DEF456789012345678 (24 characters after FH-).',
       hint: 'Copy the full code from FlexHRM — do not type it manually if possible.',
     });
   }

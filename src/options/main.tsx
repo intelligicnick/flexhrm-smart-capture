@@ -179,7 +179,7 @@ function OptionsPage() {
               type="text"
               value={connectionCode}
               onChange={(e) => setConnectionCode(e.target.value.toUpperCase())}
-              placeholder="FH-ABC123"
+              placeholder="FH-ABC123DEF456789012345678"
               className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 font-mono text-sm tracking-widest"
             />
           </div>

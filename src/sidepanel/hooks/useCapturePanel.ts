@@ -12,7 +12,7 @@ import {
   getQueue,
   saveDraft,
 } from '../../shared/services/storage';
-import { getTenderBatches } from '../../shared/services/tender-storage';
+import { getLatestTenderBatch, getTenderBatches } from '../../shared/services/tender-storage';
 import { getContractBatches } from '../../shared/services/contract-storage';
 import { confirmDeleteAll, confirmDeleteOne } from '../../shared/utils/confirm-delete';
 import { getDraftTitle } from '../../shared/utils/draft-display';
@@ -48,7 +48,7 @@ export function useCapturePanel() {
     setHistory(nextHistory);
     setQueueCount(queue.length);
 
-    const latestBatch = tenderBatches[0] ?? null;
+    const latestBatch = (await getLatestTenderBatch()) ?? tenderBatches[0] ?? null;
     setTenderBatch(latestBatch);
 
     const latestContractBatch = contractBatches[0] ?? null;
@@ -77,7 +77,26 @@ export function useCapturePanel() {
   useEffect(() => {
     void refresh();
     const onStorage = (changes: Record<string, chrome.storage.StorageChange>) => {
-      if (changes[EXTENSION_EVENT_KEY]) void refresh();
+      const eventChange = changes[EXTENSION_EVENT_KEY];
+      if (eventChange?.newValue) {
+        const event = eventChange.newValue as {
+          type?: string;
+          payload?: TenderCaptureBatch | ContractCaptureBatch;
+        };
+        if (event.type === 'TENDER_BATCH_CREATED' && event.payload && 'tenders' in event.payload) {
+          setTenderBatch(event.payload as TenderCaptureBatch);
+          setTab('tenders');
+        }
+        if (
+          event.type === 'CONTRACT_BATCH_CREATED' &&
+          event.payload &&
+          'contracts' in event.payload
+        ) {
+          setContractBatch(event.payload as ContractCaptureBatch);
+          setTab('contracts');
+        }
+      }
+      if (eventChange) void refresh();
     };
     chrome.storage.session.onChanged.addListener(onStorage);
     return () => chrome.storage.session.onChanged.removeListener(onStorage);

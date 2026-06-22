@@ -371,6 +371,10 @@ function parseQuantityNumber(raw: string): number {
   return match ? Number(match[0]) : 0;
 }
 
+export function extractTenderFromCard(card: HTMLElement): ExtractedTender | null {
+  return parseTenderCard(card, window.location.href);
+}
+
 export function extractGemTendersFromPage(root: ParentNode = document): ExtractedTender[] {
   const cards = findTenderCards(root);
   const sourceUrl = window.location.href;
